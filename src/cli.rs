@@ -6,6 +6,7 @@ use crate::commands::analytics::AnalyticsCommand;
 use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
+use crate::commands::guide::GuideArgs;
 use crate::commands::indexing::IndexingCommand;
 use crate::commands::insights::InsightsCommand;
 use crate::commands::inspect::InspectCommand;
@@ -107,6 +108,18 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+
+    /// Print a usage guide written for AI agents
+    ///
+    /// Covers the output contract, exit codes, commands by task, workflows
+    /// for common SEO questions, and what each indexing issue code means.
+    ///
+    /// To install it as a Claude Code skill:
+    ///
+    ///   mkdir -p ~/.claude/skills/gsc
+    ///   gsc guide --skill > ~/.claude/skills/gsc/SKILL.md
+    #[command(verbatim_doc_comment)]
+    Guide(GuideArgs),
 
     /// Notify Google about new, changed, or removed URLs (Indexing API)
     ///

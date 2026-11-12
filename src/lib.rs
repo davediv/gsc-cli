@@ -146,6 +146,7 @@ async fn dispatch(command: Command, ctx: &Context) -> Result<()> {
         Command::Api(args) => commands::api::run(args, ctx).await,
         Command::Auth { command } => commands::auth::run(command, ctx).await,
         Command::Config { command } => commands::config::run(command, ctx),
+        Command::Guide(args) => commands::guide::run(args),
         Command::Indexing { command } => commands::indexing::run(command, ctx).await,
         Command::Insights { command } => commands::insights::run(command, ctx).await,
         Command::Inspect { command } => commands::inspect::run(command, ctx).await,
