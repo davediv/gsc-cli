@@ -153,21 +153,13 @@ async fn select_urls(args: &BatchArgs, site: &str, client: &Client) -> Result<Se
 
     let mut problems = Vec::new();
     if !sitemaps.is_empty() && !truncated {
-        // Ask for one more than needed: getting it proves the list was cut.
-        let wanted = limit - urls.len() + 1;
-        let collected = sitemap_xml::collect_urls(client.http(), &sitemaps, wanted).await;
+        // Ask for one more new URL than there is room for: getting it proves
+        // the selection was cut short.
+        let room = limit - urls.len();
+        let collected = sitemap_xml::collect_urls(client.http(), &sitemaps, room + 1, &seen).await;
         problems = collected.problems;
-        truncated = collected.truncated;
-        for url in collected.urls {
-            if !seen.insert(url.clone()) {
-                continue;
-            }
-            if urls.len() == limit {
-                truncated = true;
-                break;
-            }
-            urls.push(url);
-        }
+        truncated = collected.truncated || collected.urls.len() > room;
+        urls.extend(collected.urls.into_iter().take(room));
     }
 
     if urls.is_empty() {
@@ -462,9 +454,9 @@ fn build_report(
     }
     if selection.truncated {
         report = report.note(format!(
-            "Stopped selecting at the limit of {}; more exist. Raise --limit to cover them \
-             (Google allows 2,000 inspections per property per day).",
-            count(selection.urls.len(), "URL")
+            "More URLs exist than the {} selected. Raise --limit to cover them (Google \
+             allows 2,000 inspections per property per day).",
+            selection.urls.len()
         ));
     }
     for problem in &selection.problems {

@@ -266,8 +266,65 @@ fn limit_caps_requests_and_reports_truncation() {
     assert!(doc["notes"].as_array().unwrap().iter().any(|n| {
         n.as_str()
             .unwrap()
-            .contains("Stopped selecting at the limit of 3 URLs")
+            .contains("More URLs exist than the 3 selected")
     }));
+}
+
+#[test]
+fn urls_listed_twice_across_sources_do_not_use_up_the_limit() {
+    let mut api = MockApi::new();
+    let base = api.server.url();
+    api.server
+        .mock("GET", "/sitemap.xml")
+        .with_body(url_set(&[
+            "https://example.com/a",
+            "https://example.com/b",
+            "https://example.com/c",
+            "https://example.com/d",
+        ]))
+        .create();
+    let inspections = inspection_endpoint(&mut api).expect(3).create();
+
+    // /a and /b are named directly and are also in the sitemap. The limit of
+    // three must still be filled, with /c.
+    let doc = api.json(&[
+        "inspect",
+        "batch",
+        "--site",
+        SITE,
+        "-n",
+        "3",
+        "https://example.com/a",
+        "https://example.com/b",
+        "--sitemap",
+        &format!("{base}/sitemap.xml"),
+    ]);
+    inspections.assert();
+    assert_eq!(
+        urls_of(&doc["results"]),
+        [
+            "https://example.com/a",
+            "https://example.com/b",
+            "https://example.com/c"
+        ]
+    );
+    assert_eq!(doc["truncated"], true, "/d was left out");
+
+    // With room for all four, nothing is cut.
+    let doc = api.json(&[
+        "inspect",
+        "batch",
+        "--site",
+        SITE,
+        "-n",
+        "4",
+        "https://example.com/a",
+        "https://example.com/b",
+        "--sitemap",
+        &format!("{base}/sitemap.xml"),
+    ]);
+    assert_eq!(doc["summary"]["urls"], 4);
+    assert_eq!(doc["truncated"], false);
 }
 
 #[test]

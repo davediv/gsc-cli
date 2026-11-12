@@ -167,16 +167,33 @@ pub struct Collected {
 
 /// Gather up to `limit` page URLs from the given sitemaps, following indexes.
 ///
+/// URLs in `already_selected` are skipped and do not count towards the
+/// limit, so the result is always `limit` *new* URLs when that many exist.
+///
 /// Reading stops as soon as the limit is reached, so a huge site does not
 /// cost hundreds of downloads when only a sample is wanted.
-pub async fn collect_urls(http: &reqwest::Client, sitemaps: &[String], limit: usize) -> Collected {
-    collect(http, sitemaps, limit, MAX_SITEMAPS, MAX_SITEMAP_BYTES).await
+pub async fn collect_urls(
+    http: &reqwest::Client,
+    sitemaps: &[String],
+    limit: usize,
+    already_selected: &HashSet<String>,
+) -> Collected {
+    collect(
+        http,
+        sitemaps,
+        limit,
+        already_selected,
+        MAX_SITEMAPS,
+        MAX_SITEMAP_BYTES,
+    )
+    .await
 }
 
 async fn collect(
     http: &reqwest::Client,
     sitemaps: &[String],
     limit: usize,
+    already_selected: &HashSet<String>,
     max_sitemaps: usize,
     max_bytes: u64,
 ) -> Collected {
@@ -186,7 +203,7 @@ async fn collect(
     // an index can list a million children, or itself.
     let mut known: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<String> = VecDeque::new();
-    let mut seen_urls: HashSet<String> = HashSet::new();
+    let mut seen_urls: HashSet<String> = already_selected.clone();
 
     let enqueue =
         |candidates: Vec<String>, known: &mut HashSet<String>, queue: &mut VecDeque<String>| {
@@ -496,7 +513,15 @@ mod tests {
         let http = reqwest::Client::new();
 
         // Four files in total: the index and its first three children.
-        let collected = collect(&http, &[format!("{base}/index.xml")], 100, 4, 1_000_000).await;
+        let collected = collect(
+            &http,
+            &[format!("{base}/index.xml")],
+            100,
+            &HashSet::new(),
+            4,
+            1_000_000,
+        )
+        .await;
         child.assert_async().await;
         assert_eq!(
             collected.urls,
@@ -508,6 +533,37 @@ mod tests {
         );
         assert!(collected.truncated, "seven children were left unread");
         assert!(collected.problems.is_empty());
+    }
+
+    #[tokio::test]
+    async fn already_selected_urls_are_skipped_without_using_up_the_limit() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/sitemap.xml")
+            .with_body(
+                "<urlset>\
+                 <url><loc>https://example.com/a</loc></url>\
+                 <url><loc>https://example.com/b</loc></url>\
+                 <url><loc>https://example.com/c</loc></url>\
+                 <url><loc>https://example.com/d</loc></url>\
+                 </urlset>",
+            )
+            .create_async()
+            .await;
+        let http = reqwest::Client::new();
+        let chosen: HashSet<String> = ["https://example.com/a", "https://example.com/b"]
+            .map(String::from)
+            .into();
+
+        let collected = collect_urls(
+            &http,
+            &[format!("{}/sitemap.xml", server.url())],
+            1,
+            &chosen,
+        )
+        .await;
+        assert_eq!(collected.urls, ["https://example.com/c"]);
+        assert!(collected.truncated, "/d is still unread");
     }
 
     #[test]
