@@ -3,16 +3,19 @@
 //! The binary in `main.rs` is a thin wrapper around [`run`]; everything else
 //! lives in this library so it can be unit-tested and reused.
 
+pub mod auth;
 pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod error;
 pub mod fsutil;
+pub mod http;
 pub mod output;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use auth::TokenProvider;
 use cli::{Cli, Command, GlobalArgs};
 use config::Config;
 use error::{Error, Result};
@@ -22,6 +25,9 @@ use output::{Format, Report};
 pub struct Context {
     /// Resolved output format: flag or env, then config, then auto-detected.
     pub format: Format,
+    /// The format the user asked for by name, if any. `None` means
+    /// [`Context::format`] was auto-detected.
+    pub explicit_format: Option<Format>,
     pub config_dir: PathBuf,
     pub config: Config,
 }
@@ -30,15 +36,23 @@ impl Context {
     fn new(global: &GlobalArgs) -> Result<Self> {
         let config_dir = config::config_dir()?;
         let config = Config::load(&config_dir)?;
-        let format = global
-            .format
-            .or(config.format)
-            .unwrap_or_else(Format::detect);
+        let explicit_format = global.format.or(config.format);
         Ok(Self {
-            format,
+            format: explicit_format.unwrap_or_else(Format::detect),
+            explicit_format,
             config_dir,
             config,
         })
+    }
+
+    /// Credentials for calling Google, or an error telling the user to log in.
+    pub fn token_provider(&self) -> Result<TokenProvider> {
+        let identity = auth::resolve(&self.config_dir)?.ok_or_else(auth::not_logged_in)?;
+        Ok(TokenProvider::new(
+            identity,
+            http::client()?,
+            self.config_dir.clone(),
+        ))
     }
 
     /// Print a command's result in the active format.
@@ -73,6 +87,7 @@ pub async fn run(cli: Cli) -> ExitCode {
 
 async fn dispatch(command: Command, ctx: &Context) -> Result<()> {
     match command {
+        Command::Auth { command } => commands::auth::run(command, ctx).await,
         Command::Config { command } => commands::config::run(command, ctx),
     }
 }

@@ -2,6 +2,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
 use crate::output::Format;
 
@@ -35,13 +36,20 @@ pub struct GlobalArgs {
         value_enum,
         value_name = "FORMAT",
         env = "GSC_FORMAT",
-        hide_default_value = true
+        hide_env_values = true,
+        help_heading = "Global options"
     )]
     pub format: Option<Format>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Sign in to Google and manage stored credentials
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+
     /// View and change saved defaults (default property, output format)
     Config {
         #[command(subcommand)]
