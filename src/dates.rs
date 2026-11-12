@@ -84,7 +84,8 @@ impl DateArgs {
             Some(text) => parse_date(text, today)?,
             None => {
                 let days = self.days.unwrap_or(DEFAULT_PERIOD_DAYS);
-                end - Days::new(u64::from(days) - 1)
+                end.checked_sub_days(Days::new(u64::from(days) - 1))
+                    .ok_or_else(|| out_of_range(format!("--days {days}")))?
             }
         };
         if start > end {
@@ -92,8 +93,33 @@ impl DateArgs {
                 "the start date {start} is after the end date {end}"
             )));
         }
+        // Keeping both ends within a sane window also guarantees that the
+        // date arithmetic in `previous` and `year_earlier` cannot overflow.
+        for date in [start, end] {
+            if date < earliest() || date > latest() {
+                return Err(out_of_range(date.to_string()));
+            }
+        }
         Ok(DateRange { start, end })
     }
+}
+
+/// Dates outside this window cannot have Search Console data, which goes
+/// back about 16 months.
+fn earliest() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date")
+}
+
+fn latest() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2100, 12, 31).expect("valid date")
+}
+
+fn out_of_range(what: String) -> Error {
+    Error::usage(format!("{what} is outside the supported range of dates")).with_hint(format!(
+        "use dates between {} and {}; Search Console keeps about 16 months of data",
+        earliest(),
+        latest()
+    ))
 }
 
 fn parse_date(text: &str, today: NaiveDate) -> Result<NaiveDate> {
@@ -206,6 +232,41 @@ mod tests {
                 .resolve(date(TODAY), false)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn absurd_periods_are_usage_errors_not_panics() {
+        let today = date(TODAY);
+        for days in [100_000_000, u32::MAX] {
+            let err = args(None, None, Some(days))
+                .resolve(today, false)
+                .unwrap_err();
+            assert_eq!(err.kind, crate::error::ErrorKind::Usage, "--days {days}");
+            assert!(err.message.contains("outside the supported range"));
+        }
+        // Far enough back to be representable, but not meaningful.
+        let err = args(None, None, Some(60_000))
+            .resolve(today, false)
+            .unwrap_err();
+        assert!(err.message.starts_with("1862-"), "{}", err.message);
+
+        assert!(
+            args(Some("0001-01-01"), None, None)
+                .resolve(today, false)
+                .is_err()
+        );
+        assert!(
+            args(Some("2026-01-01"), Some("9999-12-31"), None)
+                .resolve(today, false)
+                .is_err()
+        );
+
+        // The widest range accepted still supports both comparisons.
+        let widest = args(Some("2000-01-01"), Some("2100-12-31"), None)
+            .resolve(today, false)
+            .unwrap();
+        assert_eq!(widest.previous().days(), widest.days());
+        assert_eq!(widest.year_earlier().start, date("1999-01-01"));
     }
 
     #[test]

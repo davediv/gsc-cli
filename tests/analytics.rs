@@ -598,6 +598,33 @@ fn usage_errors_are_caught_before_any_request() {
 }
 
 #[test]
+fn an_absurd_period_is_a_usage_error_not_a_crash() {
+    let api = MockApi::new();
+    let err = api.error(
+        &[
+            "analytics",
+            "summary",
+            "--site",
+            SITE,
+            "--days",
+            "100000000",
+        ],
+        2,
+    );
+    assert_eq!(
+        err["message"],
+        "--days 100000000 is outside the supported range of dates"
+    );
+    assert!(err["hint"].as_str().unwrap().contains("16 months"));
+
+    // Representable as a period, but its comparison period would not be.
+    api.error(
+        &["insights", "compare", "--site", SITE, "--days", "60000000"],
+        2,
+    );
+}
+
+#[test]
 fn api_rejections_surface_googles_message() {
     let mut api = MockApi::new();
     api.on("POST", ENDPOINT)
