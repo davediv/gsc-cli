@@ -1,11 +1,14 @@
 //! Smoke tests for the top-level command.
 
-use assert_cmd::cargo::cargo_bin_cmd;
+mod common;
+
+use common::TestEnv;
 use predicates::prelude::*;
 
 #[test]
 fn prints_version() {
-    cargo_bin_cmd!("gsc")
+    TestEnv::new()
+        .gsc()
         .arg("--version")
         .assert()
         .success()
@@ -14,9 +17,19 @@ fn prints_version() {
 
 #[test]
 fn prints_help() {
-    cargo_bin_cmd!("gsc")
+    TestEnv::new()
+        .gsc()
         .arg("--help")
         .assert()
         .success()
         .stdout(predicate::str::contains("Google Search Console"));
+}
+
+#[test]
+fn no_arguments_shows_help_and_fails() {
+    TestEnv::new()
+        .gsc()
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Usage: gsc"));
 }

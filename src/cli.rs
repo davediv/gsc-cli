@@ -1,7 +1,8 @@
 //! Command-line definition.
 
-use clap::{Args, Parser};
+use clap::{Args, Parser, Subcommand};
 
+use crate::commands::config::ConfigCommand;
 use crate::output::Format;
 
 /// Google Search Console from the command line.
@@ -10,10 +11,18 @@ use crate::output::Format;
 /// Google indexes your URLs. Output is a table on a terminal and JSON when
 /// piped, so the same commands work for people and for AI agents.
 #[derive(Debug, Parser)]
-#[command(name = "gsc", version, propagate_version = true)]
+#[command(
+    name = "gsc",
+    version,
+    propagate_version = true,
+    arg_required_else_help = true
+)]
 pub struct Cli {
     #[command(flatten)]
     pub global: GlobalArgs,
+
+    #[command(subcommand)]
+    pub command: Command,
 }
 
 /// Options accepted by every command.
@@ -29,4 +38,13 @@ pub struct GlobalArgs {
         hide_default_value = true
     )]
     pub format: Option<Format>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// View and change saved defaults (default property, output format)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
 }
