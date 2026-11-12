@@ -3,6 +3,10 @@
 //! The binary in `main.rs` is a thin wrapper around [`run`]; everything else
 //! lives in this library so it can be unit-tested and reused.
 
+// Doc comments on clap types are the CLI's help text, where URLs are shown
+// to be read and copied, not rendered as links.
+#![allow(rustdoc::bare_urls)]
+
 pub mod api;
 pub mod auth;
 pub mod cli;
