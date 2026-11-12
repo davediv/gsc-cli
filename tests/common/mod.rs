@@ -113,3 +113,64 @@ impl TestServiceAccount {
         )
     }
 }
+
+/// The bearer token every [`MockApi`] command sends.
+pub const TEST_TOKEN: &str = "test-access-token";
+
+/// A local server standing in for Google's APIs, plus a `gsc` wired to it.
+pub struct MockApi {
+    pub env: TestEnv,
+    pub server: mockito::ServerGuard,
+}
+
+impl MockApi {
+    pub fn new() -> Self {
+        Self {
+            env: TestEnv::new(),
+            server: mockito::Server::new(),
+        }
+    }
+
+    /// A `gsc` command that talks to the mock server. Retries are off unless
+    /// a test turns them back on, so failure cases stay fast.
+    pub fn gsc(&self) -> Command {
+        let mut cmd = self.env.gsc();
+        cmd.env("GSC_API_BASE_URL", self.server.url())
+            .env("GSC_INDEXING_BASE_URL", self.server.url())
+            .env("GSC_ACCESS_TOKEN", TEST_TOKEN)
+            .env("GSC_MAX_RETRIES", "0");
+        cmd
+    }
+
+    /// Run `gsc`, require success, and parse stdout as JSON.
+    pub fn json(&self, args: &[&str]) -> serde_json::Value {
+        let output = self
+            .gsc()
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        parse_json(&output.stdout)
+    }
+
+    /// Run `gsc`, require the given exit code, and parse the JSON error on stderr.
+    pub fn error(&self, args: &[&str], exit_code: i32) -> serde_json::Value {
+        let output = self
+            .gsc()
+            .args(args)
+            .assert()
+            .code(exit_code)
+            .get_output()
+            .clone();
+        parse_json(&output.stderr)["error"].clone()
+    }
+
+    /// Start defining a response. The request must carry the test token.
+    pub fn on(&mut self, method: &str, path: &str) -> mockito::Mock {
+        self.server
+            .mock(method, path)
+            .match_header("authorization", format!("Bearer {TEST_TOKEN}").as_str())
+            .with_header("content-type", "application/json; charset=UTF-8")
+    }
+}

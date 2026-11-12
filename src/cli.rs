@@ -2,6 +2,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
 use crate::output::Format;
@@ -40,10 +41,25 @@ pub struct GlobalArgs {
         help_heading = "Global options"
     )]
     pub format: Option<Format>,
+
+    /// Log each HTTP request and response status to stderr
+    #[arg(short, long, global = true, help_heading = "Global options")]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Call any Search Console or Indexing API endpoint directly
+    ///
+    /// An escape hatch for anything the other commands do not cover. The
+    /// response is printed as JSON.
+    ///
+    ///   gsc api GET /webmasters/v3/sites
+    ///   gsc api POST /v1/urlInspection/index:inspect \
+    ///     -d '{"inspectionUrl":"https://example.com/","siteUrl":"sc-domain:example.com"}'
+    #[command(verbatim_doc_comment)]
+    Api(ApiArgs),
+
     /// Sign in to Google and manage stored credentials
     Auth {
         #[command(subcommand)]

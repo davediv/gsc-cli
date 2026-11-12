@@ -568,6 +568,7 @@ dependencies = [
  "csv",
  "mockito",
  "open",
+ "percent-encoding",
  "predicates",
  "reqwest",
  "serde",
