@@ -27,6 +27,9 @@ const EXPIRY_MARGIN_SECS: i64 = 60;
 pub enum StoredCredentials {
     /// A refresh token from the browser login flow.
     AuthorizedUser(AuthorizedUser),
+    /// A pointer to a service-account key. The key itself stays where the
+    /// user put it, so there is only ever one copy of the secret on disk.
+    ServiceAccountFile { path: PathBuf },
 }
 
 pub fn credentials_path(config_dir: &Path) -> PathBuf {

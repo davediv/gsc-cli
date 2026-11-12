@@ -1,12 +1,13 @@
 //! `gsc auth` — sign in, inspect, and remove credentials.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use serde_json::json;
 
 use crate::Context;
 use crate::auth::oauth::{self, ClientConfig, LoginRequest};
+use crate::auth::service_account::{self, ServiceAccountKey};
 use crate::auth::store::{self, StoredCredentials};
 use crate::auth::{
     self, Api, Credentials, ENV_ACCESS_TOKEN, Identity, SCOPE_INDEXING, SCOPE_WEBMASTERS,
@@ -33,6 +34,13 @@ pub enum AuthCommand {
     /// The redirect goes to 127.0.0.1 on the machine running gsc. To sign in
     /// from a remote shell, choose a --port and forward it over SSH
     /// (`ssh -L PORT:127.0.0.1:PORT host`), then open the printed URL locally.
+    ///
+    /// For servers, CI, and unattended agents use a service account instead:
+    ///
+    ///   gsc auth login --service-account key.json
+    ///
+    /// then add the service account's email address as a user of each
+    /// property in Search Console (Settings > Users and permissions).
     #[command(verbatim_doc_comment)]
     Login(LoginArgs),
 
@@ -98,6 +106,17 @@ pub struct LoginArgs {
     /// Loopback port for the sign-in redirect [default: any free port]
     #[arg(long, value_name = "PORT")]
     pub port: Option<u16>,
+
+    /// Use a service-account key file instead of signing in with a browser
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = [
+            "client_secret_file", "client_id", "client_secret",
+            "readonly", "indexing", "no_browser", "port",
+        ]
+    )]
+    pub service_account: Option<PathBuf>,
 }
 
 pub async fn run(command: AuthCommand, ctx: &Context) -> Result<()> {
@@ -110,6 +129,9 @@ pub async fn run(command: AuthCommand, ctx: &Context) -> Result<()> {
 }
 
 async fn login(args: LoginArgs, ctx: &Context) -> Result<()> {
+    if let Some(path) = &args.service_account {
+        return login_service_account(path, ctx).await;
+    }
     let client = client_config(&args, ctx)?;
     let mut scopes = vec![if args.readonly {
         SCOPE_WEBMASTERS_READONLY
@@ -136,7 +158,12 @@ async fn login(args: LoginArgs, ctx: &Context) -> Result<()> {
         &ctx.config_dir,
         &StoredCredentials::AuthorizedUser(grant.user.clone()),
     )?;
-    TokenProvider::remember(&ctx.config_dir, &grant.user, &grant.access_token);
+    TokenProvider::remember(
+        &ctx.config_dir,
+        &Credentials::AuthorizedUser(grant.user.clone()),
+        Api::SearchConsole,
+        &grant.access_token,
+    );
 
     let path = store::credentials_path(&ctx.config_dir);
     let report = Report::new(json!({
@@ -149,6 +176,42 @@ async fn login(args: LoginArgs, ctx: &Context) -> Result<()> {
     .field("Scopes", short_scopes(&grant.user.scopes))
     .field("Saved to", path.display().to_string())
     .note("Next: run `gsc sites list` to see your properties.");
+    ctx.emit(&report)
+}
+
+/// Save a pointer to a service-account key after proving the key works.
+async fn login_service_account(path: &Path, ctx: &Context) -> Result<()> {
+    // Stored as an absolute path so it keeps working from any directory.
+    let path = std::fs::canonicalize(path)
+        .map_err(|e| Error::usage(format!("cannot read {}: {e}", path.display())))?;
+    let key = ServiceAccountKey::from_file(&path)?;
+    let token = service_account::fetch_token(&http::client()?, &key, &[SCOPE_WEBMASTERS]).await?;
+
+    store::save_credentials(
+        &ctx.config_dir,
+        &StoredCredentials::ServiceAccountFile { path: path.clone() },
+    )?;
+    let email = key.client_email.clone();
+    TokenProvider::remember(
+        &ctx.config_dir,
+        &Credentials::ServiceAccount(key),
+        Api::SearchConsole,
+        &token,
+    );
+
+    let report = Report::new(json!({
+        "authenticated": true,
+        "method": "service_account",
+        "account": email,
+        "keyFile": path,
+    }))
+    .field("Status", "Logged in")
+    .field("Service account", email.clone())
+    .field("Key file", path.display().to_string())
+    .note(format!(
+        "Next: add {email} as a user of each property in Search Console \
+         (Settings > Users and permissions), then run `gsc sites list`."
+    ));
     ctx.emit(&report)
 }
 
@@ -194,7 +257,7 @@ async fn status(ctx: &Context) -> Result<()> {
     .field("Method", method_label(identity))
     .field("Source", identity.source.to_string());
     if let Some(account) = identity.account() {
-        report = report.field("Client ID", account);
+        report = report.field(account_label(identity), account);
     }
     if !scopes.is_empty() {
         report = report.field("Scopes", short_scopes(&scopes));
@@ -216,6 +279,14 @@ fn method_label(identity: &Identity) -> &'static str {
     match identity.credentials {
         Credentials::AccessToken(_) => "Access token",
         Credentials::AuthorizedUser(_) => "OAuth (browser login)",
+        Credentials::ServiceAccount(_) => "Service account",
+    }
+}
+
+fn account_label(identity: &Identity) -> &'static str {
+    match identity.credentials {
+        Credentials::ServiceAccount(_) => "Service account",
+        Credentials::AccessToken(_) | Credentials::AuthorizedUser(_) => "Client ID",
     }
 }
 
