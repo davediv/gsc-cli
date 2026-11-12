@@ -39,7 +39,8 @@ fn keywords_sends_the_expected_request_and_flattens_rows() {
             "endDate": "2026-10-28",
             "type": "web",
             "dimensions": ["query"],
-            "rowLimit": 100,
+            // One more than the 100 shown, to learn whether more exist.
+            "rowLimit": 101,
             "startRow": 0,
         })))
         .with_body(
@@ -144,7 +145,7 @@ fn filters_types_and_data_state_reach_the_api() {
             ]}],
             "aggregationType": "byPage",
             "dataState": "all",
-            "rowLimit": 10,
+            "rowLimit": 11,
             "startRow": 20,
         })))
         .with_body(r#"{"rows":[]}"#)
@@ -288,22 +289,74 @@ fn hour_dimension_switches_to_hourly_data_ending_today() {
 }
 
 #[test]
-fn limit_reached_marks_the_result_truncated() {
+fn truncated_is_true_only_when_more_rows_really_exist() {
+    let three = json!({ "rows": [
+        api_row(&["a"], 9, 90, 1.0),
+        api_row(&["b"], 8, 80, 2.0),
+        api_row(&["c"], 7, 70, 3.0),
+    ]})
+    .to_string();
+    let mut args = vec!["keywords", "-n", "2"];
+    args.extend_from_slice(&PERIOD);
+
+    // Asking for 2 requests 3. All three arrive, so a third row exists.
     let mut api = MockApi::new();
     api.on("POST", ENDPOINT)
-        .match_body(Matcher::PartialJson(json!({ "rowLimit": 2 })))
+        .match_body(Matcher::PartialJson(json!({ "rowLimit": 3 })))
+        .with_body(&three)
+        .create();
+    let doc = run(&api, &args);
+    assert_eq!(doc["rowCount"], 2);
+    assert_eq!(doc["rows"][1]["query"], "b", "the probe row is not shown");
+    assert_eq!(doc["truncated"], true);
+    assert!(doc["notes"][0].as_str().unwrap().contains("--all"));
+
+    // Exactly as many rows as the limit: nothing was cut off.
+    let mut api = MockApi::new();
+    api.on("POST", ENDPOINT)
         .with_body(
             json!({ "rows": [api_row(&["a"], 9, 90, 1.0), api_row(&["b"], 8, 80, 2.0)] })
                 .to_string(),
         )
         .create();
-
-    let mut args = vec!["keywords", "-n", "2"];
-    args.extend_from_slice(&PERIOD);
     let doc = run(&api, &args);
     assert_eq!(doc["rowCount"], 2);
-    assert_eq!(doc["truncated"], true);
-    assert!(doc["notes"][0].as_str().unwrap().contains("--all"));
+    assert_eq!(doc["truncated"], false);
+    assert_eq!(doc.get("notes"), None);
+}
+
+#[test]
+fn a_full_time_series_is_not_reported_as_truncated() {
+    let mut api = MockApi::new();
+    // 180 days requested, and Google has a row for every one of them.
+    let days: Vec<Value> = (0..180)
+        .map(|i| {
+            let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(i);
+            api_row(&[&date.to_string()], 10, 100, 5.0)
+        })
+        .collect();
+    let query = api
+        .on("POST", ENDPOINT)
+        .match_body(Matcher::PartialJson(
+            json!({ "dimensions": ["date"], "rowLimit": 181 }),
+        ))
+        .with_body(json!({ "rows": days }).to_string())
+        .create();
+
+    let doc = api.json(&[
+        "analytics",
+        "dates",
+        "--site",
+        SITE,
+        "--start",
+        "2026-01-01",
+        "--end",
+        "2026-06-29",
+    ]);
+    query.assert();
+    assert_eq!(doc["rowCount"], 180);
+    assert_eq!(doc["truncated"], false);
+    assert_eq!(doc.get("notes"), None);
 }
 
 #[test]
@@ -391,11 +444,12 @@ fn a_limit_above_one_page_is_split_across_requests() {
         ))
         .with_body(json!({ "rows": full_page }).to_string())
         .create();
+    // The second request asks for the remaining 5 plus the probe row.
     let remainder = api
         .on("POST", ENDPOINT)
-        .match_body(Matcher::PartialJson(json!({ "startRow": 25000, "rowLimit": 5 })))
+        .match_body(Matcher::PartialJson(json!({ "startRow": 25000, "rowLimit": 6 })))
         .with_body(
-            json!({ "rows": (0..5).map(|i| api_row(&[&format!("tail{i}")], 1, 10, 5.0)).collect::<Vec<_>>() })
+            json!({ "rows": (0..6).map(|i| api_row(&[&format!("tail{i}")], 1, 10, 5.0)).collect::<Vec<_>>() })
                 .to_string(),
         )
         .create();
@@ -405,10 +459,64 @@ fn a_limit_above_one_page_is_split_across_requests() {
     let doc = run(&api, &args);
     remainder.assert();
     assert_eq!(doc["rowCount"], 25_005);
+    assert_eq!(doc["rows"][25_004]["query"], "tail4");
     assert_eq!(
         doc["truncated"], true,
-        "the last page was full, so more may exist"
+        "the probe row came back, so more exist"
     );
+}
+
+#[test]
+fn offset_pages_through_a_sorted_ranking() {
+    let mut api = MockApi::new();
+    // In Google's order (by clicks): a, b, c, d. By impressions: d, c, b, a.
+    let ranking = api
+        .on("POST", ENDPOINT)
+        .match_body(Matcher::PartialJson(
+            json!({ "startRow": 0, "rowLimit": 25000 }),
+        ))
+        .with_body(
+            json!({ "rows": [
+                api_row(&["a"], 40, 100, 1.0),
+                api_row(&["b"], 30, 200, 2.0),
+                api_row(&["c"], 20, 300, 3.0),
+                api_row(&["d"], 10, 400, 4.0),
+            ]})
+            .to_string(),
+        )
+        .expect(2)
+        .create();
+    let page = |offset: &'static str| {
+        let mut args = vec![
+            "keywords",
+            "--sort",
+            "impressions",
+            "-n",
+            "2",
+            "--offset",
+            offset,
+        ];
+        args.extend_from_slice(&PERIOD);
+        run(&api, &args)
+    };
+    let names = |doc: &Value| -> Vec<String> {
+        doc["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["query"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let first = page("0");
+    assert_eq!(names(&first), ["d", "c"]);
+    assert_eq!(first["truncated"], true);
+
+    // Page two continues the same ranking; both requests start at row 0.
+    let second = page("2");
+    assert_eq!(names(&second), ["b", "a"]);
+    assert_eq!(second["truncated"], false);
+    ranking.assert();
 }
 
 #[test]

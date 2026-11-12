@@ -381,7 +381,8 @@ pub struct Rows {
     pub aggregation: Option<String>,
     /// Present when the range includes days that are still being processed.
     pub metadata: Option<Value>,
-    /// False when the limit was reached while Google still had rows to give.
+    /// True when these are all the rows Google has from the starting row on;
+    /// false when at least one more exists beyond the limit.
     pub exhausted: bool,
 }
 
@@ -389,7 +390,8 @@ impl Client {
     /// Fetch up to `limit` rows (`None` for all of them), skipping `start_row`.
     ///
     /// Google caps a single response at [`PAGE_SIZE`] rows, so larger requests
-    /// are split into consecutive pages.
+    /// are split into consecutive pages. One row beyond `limit` is requested
+    /// and discarded, which is what makes [`Rows::exhausted`] exact.
     pub async fn search_analytics(
         &self,
         site: &str,
@@ -401,17 +403,23 @@ impl Client {
             "/webmasters/v3/sites/{}/searchAnalytics/query",
             encode_segment(site)
         );
+        // To tell "reached the limit" apart from "ran out of rows", ask for
+        // one row more than was wanted and see whether it arrives. A query
+        // without dimensions has a single row, so it needs no such probe.
+        let probe = u32::from(!query.dimensions.is_empty());
+        let target = limit.map(|limit| limit.saturating_add(probe));
+
         let mut result = Rows::default();
         loop {
             let fetched = result.rows.len() as u32;
-            let page_limit = match limit {
-                Some(limit) => (limit - fetched).min(PAGE_SIZE),
+            let page_limit = match target {
+                Some(target) => target.saturating_sub(fetched).min(PAGE_SIZE),
                 None => PAGE_SIZE,
             };
             if page_limit == 0 {
                 break;
             }
-            let body = query.body(start_row + fetched, page_limit);
+            let body = query.body(start_row.saturating_add(fetched), page_limit);
             let page: QueryResponse = self
                 .call(Api::SearchConsole, Method::POST, &path, &[], Some(&body))
                 .await?;
@@ -428,6 +436,16 @@ impl Client {
             if received < page_limit {
                 result.exhausted = true;
                 break;
+            }
+        }
+
+        if let Some(limit) = limit {
+            if result.rows.len() > limit as usize {
+                // The probe row arrived: there is more than was asked for.
+                result.rows.truncate(limit as usize);
+                result.exhausted = false;
+            } else if probe == 0 {
+                result.exhausted = true;
             }
         }
         Ok(result)

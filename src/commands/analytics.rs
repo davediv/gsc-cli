@@ -171,7 +171,8 @@ pub struct QueryOptions {
     #[arg(long)]
     pub all: bool,
 
-    /// Skip this many rows before the first one returned
+    /// Skip this many rows before the first one returned. With --sort, rows
+    /// are skipped after sorting, so offsets page through the ranking
     #[arg(long, value_name = "N", default_value_t = 0)]
     pub offset: u32,
 
@@ -209,38 +210,48 @@ impl Scope {
     }
 }
 
-/// How many rows to ask Google for, and how many to show.
+/// What to ask Google for, and which of the returned rows to show.
 #[derive(Debug, PartialEq, Eq)]
 struct Plan {
-    /// `None` fetches every row.
+    /// First row to request, in Google's order (most clicks first).
+    start_row: u32,
+    /// How many rows to request. `None` fetches every row.
     fetch: Option<u32>,
-    /// `None` shows everything that was fetched.
+    /// Rows to drop from the front once they are in their final order.
+    skip: usize,
+    /// How many rows to show. `None` shows everything that is left.
     show: Option<u32>,
 }
 
 impl Plan {
     fn new(options: &QueryOptions, dimensions: &[Dimension], period_days: i64) -> Self {
-        if options.all {
-            return Plan {
-                fetch: None,
-                show: None,
-            };
-        }
-        let limit = options.limit.unwrap_or_else(|| match dimensions {
+        let period_days = period_days.clamp(1, i64::from(u32::MAX / 24)) as u32;
+        let limit = options.limit.unwrap_or(match dimensions {
             [] => 1,
             // A time series should cover its whole period by default.
-            [Dimension::Date] => (period_days as u32).max(DEFAULT_LIMIT),
+            [Dimension::Date] => period_days.max(DEFAULT_LIMIT),
+            [Dimension::Hour] => (period_days * 24).max(DEFAULT_LIMIT),
             _ => DEFAULT_LIMIT,
         });
-        Plan {
-            // Google only sorts by clicks. To rank by anything else, fetch a
-            // full page and sort it here.
-            fetch: Some(if options.sort.is_some() {
-                limit.max(PAGE_SIZE)
-            } else {
-                limit
-            }),
-            show: Some(limit),
+        let show = (!options.all).then_some(limit);
+
+        if options.sort.is_some() {
+            // Google only sorts by clicks. To rank by anything else, fetch at
+            // least a full page from the top and sort it here. --offset then
+            // has to be applied to the sorted rows, not to Google's order.
+            Plan {
+                start_row: 0,
+                fetch: show.map(|limit| limit.saturating_add(options.offset).max(PAGE_SIZE)),
+                skip: options.offset as usize,
+                show,
+            }
+        } else {
+            Plan {
+                start_row: options.offset,
+                fetch: show,
+                skip: 0,
+                show,
+            }
         }
     }
 }
@@ -269,7 +280,7 @@ pub async fn run(command: AnalyticsCommand, ctx: &Context) -> Result<()> {
     let client = ctx.client()?;
     let site = ctx.site(&client).await?;
     let fetched = client
-        .search_analytics(&site, &query, options.offset, plan.fetch)
+        .search_analytics(&site, &query, plan.start_row, plan.fetch)
         .await?;
 
     let mut rows = fetched.rows;
@@ -281,13 +292,14 @@ pub async fn run(command: AnalyticsCommand, ctx: &Context) -> Result<()> {
             options.order.unwrap_or(default_order(metric)),
         );
     }
+    let mut rows: Vec<Row> = rows.into_iter().skip(plan.skip).collect();
+    let available = rows.len();
     if let Some(show) = plan.show {
         rows.truncate(show as usize);
     }
-    // Whether rows were left out: cut off locally, or the limit was reached
-    // while Google still had a full page to give. Ungrouped totals are a
-    // single row, so they are never partial.
-    let truncated = !dimensions.is_empty() && (!fetched.exhausted || rows.len() < scanned);
+    // Rows were left out if Google has more than was fetched, or if some of
+    // what was fetched is not shown. Ungrouped totals are a single row.
+    let truncated = !dimensions.is_empty() && (!fetched.exhausted || rows.len() < available);
 
     let mut document = json!({
         "site": site,
@@ -453,17 +465,26 @@ mod tests {
         assert_eq!(
             plan,
             Plan {
+                start_row: 0,
                 fetch: Some(100),
+                skip: 0,
                 show: Some(100)
             }
         );
-        let plan = Plan::new(&options(&["--limit", "5"]), &[Dimension::Query], 28);
+        let plan = Plan::new(
+            &options(&["--limit", "5", "--offset", "40"]),
+            &[Dimension::Query],
+            28,
+        );
         assert_eq!(
             plan,
             Plan {
+                start_row: 40,
                 fetch: Some(5),
+                skip: 0,
                 show: Some(5)
-            }
+            },
+            "without --sort, Google's order is the final order, so it can skip the rows"
         );
     }
 
@@ -477,10 +498,38 @@ mod tests {
         assert_eq!(
             plan,
             Plan {
+                start_row: 0,
                 fetch: Some(PAGE_SIZE),
+                skip: 0,
                 show: Some(20)
             }
         );
+    }
+
+    #[test]
+    fn offset_is_applied_after_sorting_not_before() {
+        let plan = Plan::new(
+            &options(&["--sort", "impressions", "-n", "10", "--offset", "10"]),
+            &[Dimension::Query],
+            28,
+        );
+        assert_eq!(
+            plan,
+            Plan {
+                start_row: 0,
+                fetch: Some(PAGE_SIZE),
+                skip: 10,
+                show: Some(10)
+            },
+            "page two of a ranking must come from the same ranked set as page one"
+        );
+
+        let deep = Plan::new(
+            &options(&["--sort", "ctr", "-n", "100", "--offset", "30000"]),
+            &[Dimension::Query],
+            28,
+        );
+        assert_eq!(deep.fetch, Some(30_100), "enough rows to reach the window");
     }
 
     #[test]
@@ -489,7 +538,23 @@ mod tests {
         assert_eq!(
             plan,
             Plan {
+                start_row: 0,
                 fetch: None,
+                skip: 0,
+                show: None
+            }
+        );
+        let sorted = Plan::new(
+            &options(&["--all", "--sort", "position", "--offset", "5"]),
+            &[Dimension::Page],
+            28,
+        );
+        assert_eq!(
+            sorted,
+            Plan {
+                start_row: 0,
+                fetch: None,
+                skip: 5,
                 show: None
             }
         );
@@ -505,6 +570,11 @@ mod tests {
         assert_eq!(
             Plan::new(&options(&[]), &[Dimension::Date], 7).show,
             Some(100)
+        );
+        assert_eq!(
+            Plan::new(&options(&[]), &[Dimension::Hour], 10).show,
+            Some(240),
+            "ten days of hourly data is 240 rows"
         );
         assert_eq!(Plan::new(&options(&[]), &[], 28).show, Some(1));
         assert_eq!(
