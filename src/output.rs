@@ -96,6 +96,8 @@ impl Column {
 /// A tabular view over an array inside the report's JSON document.
 #[derive(Debug, Clone)]
 pub struct Table {
+    /// Heading printed above the table, for reports with more than one.
+    pub title: Option<String>,
     pub columns: Vec<Column>,
     /// JSON pointer (RFC 6901) to the array of row objects, e.g. `/rows`.
     pub rows_at: &'static str,
@@ -106,7 +108,7 @@ pub struct Table {
 pub struct Report {
     json: Value,
     fields: Vec<(String, String)>,
-    table: Option<Table>,
+    tables: Vec<Table>,
     notes: Vec<String>,
 }
 
@@ -115,7 +117,7 @@ impl Report {
         Self {
             json,
             fields: Vec::new(),
-            table: None,
+            tables: Vec::new(),
             notes: Vec::new(),
         }
     }
@@ -126,8 +128,29 @@ impl Report {
         self
     }
 
+    /// Add a table. The first one added is the report's primary table: it
+    /// is the one CSV output contains.
     pub fn table(mut self, columns: Vec<Column>, rows_at: &'static str) -> Self {
-        self.table = Some(Table { columns, rows_at });
+        self.tables.push(Table {
+            title: None,
+            columns,
+            rows_at,
+        });
+        self
+    }
+
+    /// Add a further table under a heading.
+    pub fn section(
+        mut self,
+        title: impl Into<String>,
+        columns: Vec<Column>,
+        rows_at: &'static str,
+    ) -> Self {
+        self.tables.push(Table {
+            title: Some(title.into()),
+            columns,
+            rows_at,
+        });
         self
     }
 
@@ -211,7 +234,7 @@ fn render_json(report: &Report, streams: Streams<'_>) -> io::Result<()> {
 
 fn render_csv(report: &Report, streams: Streams<'_>) -> io::Result<()> {
     let mut writer = csv::Writer::from_writer(streams.out);
-    match &report.table {
+    match report.tables.first() {
         Some(table) => {
             writer.write_record(table.columns.iter().map(|c| c.key.as_str()))?;
             for row in report.rows(table) {
@@ -251,9 +274,12 @@ fn render_table(report: &Report, streams: Streams<'_>) -> io::Result<()> {
         wrote_block = true;
     }
 
-    if let Some(table) = &report.table {
+    for table in &report.tables {
         if wrote_block {
             writeln!(out)?;
+        }
+        if let Some(title) = &table.title {
+            writeln!(out, "{title}:")?;
         }
         let rows = report.rows(table);
         if rows.is_empty() {
@@ -533,6 +559,45 @@ rust cli   1,200   3.53%       8.2
             "(no rows)\n"
         );
         assert_eq!(render_to_strings(&report, Format::Csv, false).0, "query\n");
+    }
+
+    #[test]
+    fn extra_sections_are_titled_and_csv_keeps_only_the_primary_table() {
+        let report = Report::new(json!({
+            "results": [{ "url": "https://x/a", "indexed": true }],
+            "issues": [{ "code": "soft_404", "count": 2 }],
+        }))
+        .table(
+            vec![
+                Column::text("url", "URL"),
+                Column::text("indexed", "Indexed"),
+            ],
+            "/results",
+        )
+        .section(
+            "Issues",
+            vec![
+                Column::text("code", "Issue"),
+                Column::new("count", "URLs", Kind::Int),
+            ],
+            "/issues",
+        );
+
+        assert_eq!(
+            render_to_strings(&report, Format::Table, false).0,
+            "\
+URL          INDEXED
+https://x/a  yes
+
+Issues:
+ISSUE     URLS
+soft_404     2
+"
+        );
+        assert_eq!(
+            render_to_strings(&report, Format::Csv, false).0,
+            "url,indexed\nhttps://x/a,true\n"
+        );
     }
 
     #[test]

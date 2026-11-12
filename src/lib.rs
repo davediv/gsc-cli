@@ -15,6 +15,7 @@ pub mod fsutil;
 pub mod http;
 pub mod output;
 pub mod site;
+pub mod sitemap_xml;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

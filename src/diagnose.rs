@@ -251,7 +251,7 @@ pub fn diagnose(url: &str, inspection: &Inspection) -> Vec<Issue> {
         (Some(google), Some(declared)) if google != declared => findings.add(
             "canonical_mismatch",
             Severity::Warning,
-            format!("The page declares {declared} as canonical, but Google chose {google}."),
+            "Google chose a different canonical URL than the one this page declares.",
             "If Google's choice is wrong, send consistent signals: the same URL in \
              rel=canonical, internal links, the sitemap, and redirects. Make sure the two \
              pages are not near-duplicates.",
@@ -259,7 +259,7 @@ pub fn diagnose(url: &str, inspection: &Inspection) -> Vec<Issue> {
         (Some(google), _) if google != url => findings.add(
             "canonicalised_elsewhere",
             Severity::Info,
-            format!("Google indexes {google} in place of this URL."),
+            "Google indexes a different URL in place of this one.",
             "Nothing to do if that is the preferred URL. Otherwise point rel=canonical at \
              this URL and differentiate its content.",
         ),
@@ -531,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_disagreement_names_both_urls() {
+    fn canonical_disagreement_is_a_warning() {
         let issues = issues_for(json!({
             "verdict": "NEUTRAL",
             "coverageState": "Duplicate, Google chose different canonical than user",
@@ -541,8 +541,7 @@ mod tests {
         assert_eq!(codes(&issues), ["canonical_mismatch"]);
         assert_eq!(
             issues[0].message,
-            "The page declares https://example.com/page as canonical, but Google chose \
-             https://example.com/other."
+            "Google chose a different canonical URL than the one this page declares."
         );
     }
 

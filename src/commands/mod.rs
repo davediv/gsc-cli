@@ -6,5 +6,6 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod inspect;
+pub mod inspect_batch;
 pub mod sitemaps;
 pub mod sites;

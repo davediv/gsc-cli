@@ -3,6 +3,7 @@
 use clap::Subcommand;
 use serde_json::{Map, Value, json};
 
+use super::inspect_batch::{self, BatchArgs};
 use crate::Context;
 use crate::api::inspection::Inspection;
 use crate::diagnose::{self, Issue};
@@ -25,6 +26,19 @@ pub enum InspectCommand {
         #[arg(long)]
         raw: bool,
     },
+
+    /// Inspect many URLs and group the problems found
+    ///
+    /// The closest thing the API offers to the "Page indexing" report: URLs
+    /// are inspected one by one and the findings grouped by issue, each with
+    /// the affected URLs and a fix.
+    ///
+    ///   gsc inspect batch --submitted-sitemaps --only-issues
+    ///   gsc inspect batch --sitemap https://example.com/sitemap.xml -n 500
+    ///   gsc inspect batch --file urls.txt
+    ///   gsc inspect batch https://example.com/a https://example.com/b
+    #[command(verbatim_doc_comment)]
+    Batch(BatchArgs),
 }
 
 pub async fn run(command: InspectCommand, ctx: &Context) -> Result<()> {
@@ -38,6 +52,7 @@ pub async fn run(command: InspectCommand, ctx: &Context) -> Result<()> {
             let inspected = Inspected::new(&url, &result, raw)?;
             ctx.emit(&inspected.into_report(&site))
         }
+        InspectCommand::Batch(args) => inspect_batch::run(args, &site, &client, ctx).await,
     }
 }
 
