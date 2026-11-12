@@ -266,7 +266,9 @@ fn api_error(api: Api, status: StatusCode, body: &[u8], uses_env_token: bool) ->
         .unwrap_or_else(|| {
             let text = String::from_utf8_lossy(body);
             let snippet: String = text.trim().chars().take(200).collect();
-            if snippet.is_empty() {
+            // An HTML error page (Google's generic 404, a proxy's block page)
+            // says nothing the status line does not.
+            if snippet.is_empty() || snippet.starts_with('<') {
                 format!("Google returned HTTP {status}")
             } else {
                 format!("Google returned HTTP {status}: {snippet}")
@@ -514,6 +516,16 @@ mod tests {
     fn non_json_error_bodies_are_truncated() {
         let err = error_for(Api::SearchConsole, 404, &"x".repeat(1000));
         assert!(err.message.len() < 300);
+        assert_eq!(
+            error_for(
+                Api::SearchConsole,
+                404,
+                "<!DOCTYPE html>\n<html lang=en><title>Error 404 (Not Found)!!1</title>"
+            )
+            .message,
+            "Google returned HTTP 404 Not Found",
+            "HTML error pages are not quoted"
+        );
         assert_eq!(
             error_for(Api::SearchConsole, 404, "").message,
             "Google returned HTTP 404 Not Found"
