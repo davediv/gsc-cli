@@ -8,6 +8,7 @@ pub mod auth;
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod dates;
 pub mod error;
 pub mod fsutil;
 pub mod http;
@@ -137,6 +138,7 @@ pub async fn run(cli: Cli) -> ExitCode {
 
 async fn dispatch(command: Command, ctx: &Context) -> Result<()> {
     match command {
+        Command::Analytics { command } => commands::analytics::run(command, ctx).await,
         Command::Api(args) => commands::api::run(args, ctx).await,
         Command::Auth { command } => commands::auth::run(command, ctx).await,
         Command::Config { command } => commands::config::run(command, ctx),

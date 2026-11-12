@@ -4,6 +4,7 @@
 //! the bearer token, retries transient failures, and converts Google's error
 //! responses into [`Error`]s with a hint about what to do next.
 
+pub mod analytics;
 pub mod sites;
 
 use std::time::{Duration, Instant};

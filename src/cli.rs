@@ -2,6 +2,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::commands::analytics::AnalyticsCommand;
 use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
@@ -63,6 +64,22 @@ pub struct GlobalArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Search performance: keywords, pages, countries, devices, trends
+    ///
+    /// Every subcommand accepts the same options. Dates default to the last
+    /// 28 days of finalised data.
+    ///
+    ///   gsc analytics keywords --days 7
+    ///   gsc analytics pages --query "pricing" --sort impressions
+    ///   gsc analytics keywords --page /blog/my-post --country usa
+    ///   gsc analytics dates --start 2026-01-01 --end 2026-03-31
+    ///   gsc analytics query -d query,page --filter "query regex ^how to" --all
+    #[command(verbatim_doc_comment, visible_alias = "search")]
+    Analytics {
+        #[command(subcommand)]
+        command: AnalyticsCommand,
+    },
+
     /// Call any Search Console or Indexing API endpoint directly
     ///
     /// An escape hatch for anything the other commands do not cover. The
