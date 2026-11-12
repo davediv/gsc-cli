@@ -4,6 +4,7 @@
 //! lives in this library so it can be unit-tested and reused.
 
 pub mod cli;
+pub mod error;
 
 use std::process::ExitCode;
 
