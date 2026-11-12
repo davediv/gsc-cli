@@ -495,6 +495,20 @@ rust cli   1,200   3.53%       8.2
     }
 
     #[test]
+    fn json_keeps_fields_in_the_order_they_were_written() {
+        // Dimension keys before metrics, metadata before rows: the order is
+        // chosen for readers, so it must survive serialisation.
+        let report = Report::new(json!({
+            "site": "x",
+            "rows": [{ "query": "q", "clicks": 1, "impressions": 2 }],
+        }));
+        assert_eq!(
+            render_to_strings(&report, Format::Json, false).0,
+            "{\"site\":\"x\",\"rows\":[{\"query\":\"q\",\"clicks\":1,\"impressions\":2}]}\n"
+        );
+    }
+
+    #[test]
     fn notes_reach_every_format_without_corrupting_stdout() {
         let report = sample().note("Only the top 2 rows are shown.");
 
