@@ -48,6 +48,8 @@ impl Format {
 pub enum Kind {
     /// Shown as-is. Arrays are joined with commas.
     Text,
+    /// An RFC 3339 timestamp shown as its date: `2026-11-10T03:12:45Z` → `2026-11-10`.
+    Date,
     /// Whole number with thousands separators: `12,345`.
     Int,
     /// One decimal place: `8.2`.
@@ -64,7 +66,7 @@ pub enum Kind {
 
 impl Kind {
     fn is_numeric(self) -> bool {
-        !matches!(self, Kind::Text)
+        !matches!(self, Kind::Text | Kind::Date)
     }
 }
 
@@ -337,6 +339,7 @@ fn display_cell(value: Option<&Value>, kind: Kind) -> String {
     };
     let Some(number) = value.as_f64().filter(|_| kind.is_numeric()) else {
         return match value {
+            Value::String(s) if kind == Kind::Date => date_part(s).to_owned(),
             Value::String(s) => s.clone(),
             Value::Bool(true) => "yes".into(),
             Value::Bool(false) => "no".into(),
@@ -346,13 +349,21 @@ fn display_cell(value: Option<&Value>, kind: Kind) -> String {
         };
     };
     match kind {
-        Kind::Text => unreachable!("numeric kinds only"),
+        Kind::Text | Kind::Date => unreachable!("numeric kinds only"),
         Kind::Int => group_thousands(number.round() as i64),
         Kind::Decimal => format!("{number:.1}"),
         Kind::Percent => format!("{:.2}%", number * 100.0),
         Kind::IntDelta => signed(number, group_thousands(number.round() as i64)),
         Kind::DecimalDelta => signed(number, format!("{number:.1}")),
         Kind::PercentDelta => signed(number, format!("{:.2}%", number * 100.0)),
+    }
+}
+
+/// The `YYYY-MM-DD` prefix of a timestamp, or the whole text if it has none.
+fn date_part(timestamp: &str) -> &str {
+    match timestamp.split_once('T') {
+        Some((date, _)) if date.len() == 10 => date,
+        _ => timestamp,
     }
 }
 
@@ -545,6 +556,15 @@ rust cli   1,200   3.53%       8.2
         assert_eq!(display_cell(Some(&json!(true)), Kind::Text), "yes");
         assert_eq!(display_cell(Some(&json!(["a", "b"])), Kind::Text), "a, b");
         assert_eq!(display_cell(Some(&json!([])), Kind::Text), "-");
+        assert_eq!(
+            display_cell(Some(&json!("2026-11-10T03:12:45.000Z")), Kind::Date),
+            "2026-11-10"
+        );
+        assert_eq!(
+            display_cell(Some(&json!("not a timestamp")), Kind::Date),
+            "not a timestamp"
+        );
+        assert_eq!(display_cell(Some(&Value::Null), Kind::Date), "-");
     }
 
     #[test]

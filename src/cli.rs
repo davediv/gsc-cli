@@ -6,6 +6,7 @@ use crate::commands::analytics::AnalyticsCommand;
 use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
+use crate::commands::sitemaps::SitemapsCommand;
 use crate::commands::sites::SitesCommand;
 use crate::output::Format;
 
@@ -102,6 +103,12 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+
+    /// List, inspect, submit, and remove sitemaps
+    Sitemaps {
+        #[command(subcommand)]
+        command: SitemapsCommand,
     },
 
     /// List and manage Search Console properties

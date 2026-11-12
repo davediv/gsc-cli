@@ -142,6 +142,7 @@ async fn dispatch(command: Command, ctx: &Context) -> Result<()> {
         Command::Api(args) => commands::api::run(args, ctx).await,
         Command::Auth { command } => commands::auth::run(command, ctx).await,
         Command::Config { command } => commands::config::run(command, ctx),
+        Command::Sitemaps { command } => commands::sitemaps::run(command, ctx).await,
         Command::Sites { command } => commands::sites::run(command, ctx).await,
     }
 }

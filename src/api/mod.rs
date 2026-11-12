@@ -5,6 +5,7 @@
 //! responses into [`Error`]s with a hint about what to do next.
 
 pub mod analytics;
+pub mod sitemaps;
 pub mod sites;
 
 use std::time::{Duration, Instant};
