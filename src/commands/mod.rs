@@ -5,5 +5,6 @@ pub mod analytics;
 pub mod api;
 pub mod auth;
 pub mod config;
+pub mod inspect;
 pub mod sitemaps;
 pub mod sites;

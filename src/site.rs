@@ -57,6 +57,32 @@ pub fn parse(input: &str) -> Result<SiteRef> {
     Ok(SiteRef::Bare(input.trim_end_matches('/').to_owned()))
 }
 
+/// Turn a URL or path typed by the user into a full URL within `site`.
+///
+/// A path is only meaningful for a URL-prefix property, whose identifier is
+/// itself the URL the path is relative to. `noun` names the thing being
+/// resolved, for the error message.
+pub fn absolute_url(site: &str, input: &str, noun: &str) -> Result<String> {
+    let input = input.trim();
+    if input.starts_with("http://") || input.starts_with("https://") {
+        return Ok(input.to_owned());
+    }
+    if input.is_empty() {
+        return Err(Error::usage(format!("the {noun} cannot be empty")));
+    }
+    if site.starts_with(DOMAIN_PREFIX) {
+        return Err(Error::usage(format!(
+            "`{input}` is not a full URL, and {site} is a Domain property"
+        ))
+        .with_hint("give the full URL, starting with https://"));
+    }
+    Ok(format!(
+        "{}/{}",
+        site.trim_end_matches('/'),
+        input.trim_start_matches('/')
+    ))
+}
+
 /// Property identifiers a bare name could refer to, most likely first.
 ///
 /// A Domain property is preferred because it covers every protocol and
@@ -177,6 +203,45 @@ mod tests {
         assert!(parse("sc-domain:").is_err());
         assert!(parse("sc-domain:example.com/path").is_err());
         assert!(parse("https://").is_err());
+    }
+
+    #[test]
+    fn full_urls_pass_through_for_any_property() {
+        for site in ["sc-domain:example.com", "https://example.com/"] {
+            assert_eq!(
+                absolute_url(site, " https://cdn.example.com/sitemap.xml ", "sitemap").unwrap(),
+                "https://cdn.example.com/sitemap.xml"
+            );
+        }
+    }
+
+    #[test]
+    fn paths_are_joined_to_a_url_prefix_property() {
+        let join = |site, input| absolute_url(site, input, "URL").unwrap();
+        assert_eq!(
+            join("https://example.com/", "/pricing"),
+            "https://example.com/pricing"
+        );
+        assert_eq!(
+            join("https://example.com/", "pricing"),
+            "https://example.com/pricing"
+        );
+        assert_eq!(
+            join("https://example.com/blog/", "/2026/post"),
+            "https://example.com/blog/2026/post"
+        );
+        assert_eq!(join("https://example.com/", "/"), "https://example.com/");
+    }
+
+    #[test]
+    fn paths_need_a_full_url_on_a_domain_property() {
+        let err = absolute_url("sc-domain:example.com", "/sitemap.xml", "sitemap").unwrap_err();
+        assert!(err.message.contains("Domain property"));
+        assert_eq!(
+            err.hint.unwrap(),
+            "give the full URL, starting with https://"
+        );
+        assert!(absolute_url("https://example.com/", "  ", "URL").is_err());
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod dates;
+pub mod diagnose;
 pub mod error;
 pub mod fsutil;
 pub mod http;
@@ -142,6 +143,7 @@ async fn dispatch(command: Command, ctx: &Context) -> Result<()> {
         Command::Api(args) => commands::api::run(args, ctx).await,
         Command::Auth { command } => commands::auth::run(command, ctx).await,
         Command::Config { command } => commands::config::run(command, ctx),
+        Command::Inspect { command } => commands::inspect::run(command, ctx).await,
         Command::Sitemaps { command } => commands::sitemaps::run(command, ctx).await,
         Command::Sites { command } => commands::sites::run(command, ctx).await,
     }

@@ -6,6 +6,7 @@ use crate::commands::analytics::AnalyticsCommand;
 use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
+use crate::commands::inspect::InspectCommand;
 use crate::commands::sitemaps::SitemapsCommand;
 use crate::commands::sites::SitesCommand;
 use crate::output::Format;
@@ -103,6 +104,12 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+
+    /// See how Google indexes a URL, with issues and how to fix them
+    Inspect {
+        #[command(subcommand)]
+        command: InspectCommand,
     },
 
     /// List, inspect, submit, and remove sitemaps

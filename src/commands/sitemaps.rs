@@ -7,6 +7,7 @@ use crate::Context;
 use crate::api::sitemaps::Sitemap;
 use crate::error::{Error, Result};
 use crate::output::{Column, Kind, Report};
+use crate::site;
 
 #[derive(Debug, Subcommand)]
 pub enum SitemapsCommand {
@@ -50,7 +51,9 @@ pub async fn run(command: SitemapsCommand, ctx: &Context) -> Result<()> {
 
     match command {
         SitemapsCommand::List { index } => {
-            let index = index.map(|i| sitemap_url(&site, &i)).transpose()?;
+            let index = index
+                .map(|i| site::absolute_url(&site, &i, "sitemap"))
+                .transpose()?;
             let sitemaps = client.list_sitemaps(&site, index.as_deref()).await?;
             let rows: Vec<Value> = sitemaps.iter().map(Sitemap::to_json).collect();
             let mut report = Report::new(json!({ "site": site, "sitemaps": rows }))
@@ -76,12 +79,12 @@ pub async fn run(command: SitemapsCommand, ctx: &Context) -> Result<()> {
             ctx.emit(&report)
         }
         SitemapsCommand::Get { sitemap } => {
-            let url = sitemap_url(&site, &sitemap)?;
+            let url = site::absolute_url(&site, &sitemap, "sitemap")?;
             let found = client.get_sitemap(&site, &url).await?;
             ctx.emit(&detail(&site, &found))
         }
         SitemapsCommand::Submit { sitemap } => {
-            let url = sitemap_url(&site, &sitemap)?;
+            let url = site::absolute_url(&site, &sitemap, "sitemap")?;
             client.submit_sitemap(&site, &url).await?;
             let report = Report::new(json!({ "site": site, "sitemap": url, "submitted": true }))
                 .field("Submitted", url.clone())
@@ -93,7 +96,7 @@ pub async fn run(command: SitemapsCommand, ctx: &Context) -> Result<()> {
             ctx.emit(&report)
         }
         SitemapsCommand::Delete { sitemap, yes } => {
-            let url = sitemap_url(&site, &sitemap)?;
+            let url = site::absolute_url(&site, &sitemap, "sitemap")?;
             if !yes {
                 return Err(
                     Error::usage(format!("refusing to remove {url} without confirmation"))
@@ -113,31 +116,6 @@ pub async fn run(command: SitemapsCommand, ctx: &Context) -> Result<()> {
 /// The API reports how many errors a sitemap has, but not what they are.
 const ERROR_DETAIL_NOTE: &str = "The API only reports error counts. To see what is wrong, fetch \
      the sitemap and validate it, or open the Sitemaps report in Search Console.";
-
-/// Turn what the user typed into the sitemap's full URL.
-///
-/// A path is only meaningful for a URL-prefix property, whose identifier is
-/// itself the URL the path is relative to.
-fn sitemap_url(site: &str, input: &str) -> Result<String> {
-    let input = input.trim();
-    if input.starts_with("http://") || input.starts_with("https://") {
-        return Ok(input.to_owned());
-    }
-    if input.is_empty() {
-        return Err(Error::usage("the sitemap cannot be empty"));
-    }
-    if site.starts_with("sc-domain:") {
-        return Err(Error::usage(format!(
-            "`{input}` is not a full URL, and {site} is a Domain property"
-        ))
-        .with_hint("give the sitemap's full URL, e.g. https://example.com/sitemap.xml"));
-    }
-    Ok(format!(
-        "{}/{}",
-        site.trim_end_matches('/'),
-        input.trim_start_matches('/')
-    ))
-}
 
 fn detail(site: &str, sitemap: &Sitemap) -> Report {
     let mut document = sitemap.to_json();
@@ -177,43 +155,4 @@ fn detail(site: &str, sitemap: &Sitemap) -> Report {
         report = report.note(ERROR_DETAIL_NOTE);
     }
     report
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn full_urls_pass_through_for_any_property() {
-        for site in ["sc-domain:example.com", "https://example.com/"] {
-            assert_eq!(
-                sitemap_url(site, " https://cdn.example.com/sitemap.xml ").unwrap(),
-                "https://cdn.example.com/sitemap.xml"
-            );
-        }
-    }
-
-    #[test]
-    fn paths_are_joined_to_a_url_prefix_property() {
-        assert_eq!(
-            sitemap_url("https://example.com/", "/sitemap.xml").unwrap(),
-            "https://example.com/sitemap.xml"
-        );
-        assert_eq!(
-            sitemap_url("https://example.com/", "sitemap.xml").unwrap(),
-            "https://example.com/sitemap.xml"
-        );
-        assert_eq!(
-            sitemap_url("https://example.com/blog/", "/news/sitemap.xml").unwrap(),
-            "https://example.com/blog/news/sitemap.xml"
-        );
-    }
-
-    #[test]
-    fn paths_need_a_full_url_on_a_domain_property() {
-        let err = sitemap_url("sc-domain:example.com", "/sitemap.xml").unwrap_err();
-        assert!(err.message.contains("Domain property"));
-        assert!(err.hint.unwrap().contains("full URL"));
-        assert!(sitemap_url("https://example.com/", "  ").is_err());
-    }
 }
