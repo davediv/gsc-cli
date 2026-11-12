@@ -7,15 +7,20 @@ use reqwest::Method;
 use serde_json::{Value, json};
 
 use crate::Context;
+use crate::api::encode_segment;
 use crate::auth::Api;
 use crate::error::{Error, Result};
+
+/// Stands for the selected property in a request path.
+const SITE_PLACEHOLDER: &str = "{site}";
 
 #[derive(Debug, Args)]
 pub struct ApiArgs {
     /// HTTP method: GET, POST, PUT, or DELETE
     pub method: String,
 
-    /// Path within the API, e.g. /webmasters/v3/sites
+    /// Path within the API, e.g. /webmasters/v3/sites. A literal `{site}`
+    /// is replaced with the URL-encoded property
     pub path: String,
 
     /// JSON request body: a literal, @FILE to read a file, or - for stdin
@@ -51,9 +56,15 @@ pub async fn run(args: ApiArgs, ctx: &Context) -> Result<()> {
         Api::SearchConsole
     };
 
-    let response = ctx
-        .client()?
-        .request(api, method, &args.path, &query, body.as_ref())
+    let client = ctx.client()?;
+    let path = if args.path.contains(SITE_PLACEHOLDER) {
+        let site = ctx.site(&client).await?;
+        args.path.replace(SITE_PLACEHOLDER, &encode_segment(&site))
+    } else {
+        args.path.clone()
+    };
+    let response = client
+        .request(api, method, &path, &query, body.as_ref())
         .await?;
     // Successful writes come back empty; print an empty object so the output
     // is always a JSON document.

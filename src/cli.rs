@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
+use crate::commands::sites::SitesCommand;
 use crate::output::Format;
 
 /// Google Search Console from the command line.
@@ -42,6 +43,19 @@ pub struct GlobalArgs {
     )]
     pub format: Option<Format>,
 
+    /// Property to use: `sc-domain:example.com`, `https://example.com/`, or
+    /// just `example.com` [default: saved with `gsc config set site`]
+    #[arg(
+        short,
+        long,
+        global = true,
+        value_name = "PROPERTY",
+        env = "GSC_SITE",
+        hide_env_values = true,
+        help_heading = "Global options"
+    )]
+    pub site: Option<String>,
+
     /// Log each HTTP request and response status to stderr
     #[arg(short, long, global = true, help_heading = "Global options")]
     pub verbose: bool,
@@ -55,6 +69,7 @@ pub enum Command {
     /// response is printed as JSON.
     ///
     ///   gsc api GET /webmasters/v3/sites
+    ///   gsc api GET '/webmasters/v3/sites/{site}/sitemaps' --site example.com
     ///   gsc api POST /v1/urlInspection/index:inspect \
     ///     -d '{"inspectionUrl":"https://example.com/","siteUrl":"sc-domain:example.com"}'
     #[command(verbatim_doc_comment)]
@@ -70,5 +85,11 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+
+    /// List and manage Search Console properties
+    Sites {
+        #[command(subcommand)]
+        command: SitesCommand,
     },
 }

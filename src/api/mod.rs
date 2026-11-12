@@ -4,6 +4,8 @@
 //! the bearer token, retries transient failures, and converts Google's error
 //! responses into [`Error`]s with a hint about what to do next.
 
+pub mod sites;
+
 use std::time::{Duration, Instant};
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -43,6 +45,28 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 /// every `/` and `:` must be escaped when they appear in a request path.
 pub fn encode_segment(value: &str) -> String {
     utf8_percent_encode(value, PATH_SEGMENT).to_string()
+}
+
+/// Normalise an enum value to the lowerCamelCase spelling used in Google's
+/// reference documentation.
+///
+/// Depending on the endpoint, the API answers with either `siteOwner` or
+/// `SITE_OWNER`. Emitting one spelling keeps `gsc` output predictable.
+pub fn lower_camel(value: &str) -> String {
+    if value.chars().any(|c| c.is_ascii_lowercase()) {
+        return value.to_owned();
+    }
+    let mut out = String::with_capacity(value.len());
+    for word in value.split('_').filter(|word| !word.is_empty()) {
+        let mut chars = word.chars();
+        match chars.next() {
+            Some(first) if !out.is_empty() => out.push(first.to_ascii_uppercase()),
+            Some(first) => out.push(first.to_ascii_lowercase()),
+            None => {}
+        }
+        out.push_str(&chars.as_str().to_ascii_lowercase());
+    }
+    out
 }
 
 pub struct Client {
@@ -357,6 +381,16 @@ mod tests {
             "https%3A%2F%2Fexample.com%2Fa%20b%3Fx%3D1%26y%3D%C3%BC"
         );
         assert_eq!(encode_segment("safe-._~chars"), "safe-._~chars");
+    }
+
+    #[test]
+    fn enum_values_are_normalised_to_lower_camel_case() {
+        assert_eq!(lower_camel("SITE_OWNER"), "siteOwner");
+        assert_eq!(lower_camel("siteOwner"), "siteOwner");
+        assert_eq!(lower_camel("BY_NEWS_SHOWCASE_PANEL"), "byNewsShowcasePanel");
+        assert_eq!(lower_camel("WEB"), "web");
+        assert_eq!(lower_camel("sitemap"), "sitemap");
+        assert_eq!(lower_camel(""), "");
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod error;
 pub mod fsutil;
 pub mod http;
 pub mod output;
+pub mod site;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,6 +22,7 @@ use cli::{Cli, Command, GlobalArgs};
 use config::Config;
 use error::{Error, Result};
 use output::{Format, Report};
+use site::SiteRef;
 
 /// Everything a command needs besides its own arguments.
 pub struct Context {
@@ -33,6 +35,8 @@ pub struct Context {
     pub config: Config,
     /// Log HTTP requests to stderr.
     pub verbose: bool,
+    /// The property named by `--site` or `$GSC_SITE`, as typed.
+    pub site_arg: Option<String>,
 }
 
 impl Context {
@@ -46,7 +50,35 @@ impl Context {
             config_dir,
             config,
             verbose: global.verbose,
+            site_arg: global.site.clone(),
         })
+    }
+
+    /// The property to operate on: `--site`, then `$GSC_SITE`, then the
+    /// saved default. A bare domain is matched against the account's properties.
+    pub async fn site(&self, client: &api::Client) -> Result<String> {
+        let input = self
+            .site_arg
+            .as_deref()
+            .or(self.config.site.as_deref())
+            .ok_or_else(|| {
+                Error::usage("no property selected").with_hint(
+                    "pass --site <property>, set $GSC_SITE, or save a default with \
+                     `gsc config set site <property>`; `gsc sites list` shows what is available",
+                )
+            })?;
+        self.resolve_site(client, input).await
+    }
+
+    /// Turn what the user typed into the exact identifier the API expects.
+    pub async fn resolve_site(&self, client: &api::Client, input: &str) -> Result<String> {
+        match site::parse(input)? {
+            SiteRef::Exact(site_url) => Ok(site_url),
+            SiteRef::Bare(name) => {
+                let sites = client.list_sites().await?;
+                Ok(site::pick(&name, &sites)?.site_url.clone())
+            }
+        }
     }
 
     /// Credentials for calling Google, or an error telling the user to log in.
@@ -108,6 +140,7 @@ async fn dispatch(command: Command, ctx: &Context) -> Result<()> {
         Command::Api(args) => commands::api::run(args, ctx).await,
         Command::Auth { command } => commands::auth::run(command, ctx).await,
         Command::Config { command } => commands::config::run(command, ctx),
+        Command::Sites { command } => commands::sites::run(command, ctx).await,
     }
 }
 
