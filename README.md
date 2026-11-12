@@ -19,7 +19,7 @@ gsc inspect batch --submitted-sitemaps --only-issues    # indexing problems, eac
 Requires Rust 1.88 or newer and a C compiler (for the TLS library).
 
 ```sh
-git clone <this repository> && cd gsc-cli
+git clone https://github.com/davediv/gsc-cli.git && cd gsc-cli
 cargo install --path .
 gsc --version
 ```
