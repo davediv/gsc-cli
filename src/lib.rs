@@ -13,6 +13,7 @@ pub mod diagnose;
 pub mod error;
 pub mod fsutil;
 pub mod http;
+pub mod insights;
 pub mod output;
 pub mod site;
 pub mod sitemap_xml;
@@ -144,6 +145,7 @@ async fn dispatch(command: Command, ctx: &Context) -> Result<()> {
         Command::Api(args) => commands::api::run(args, ctx).await,
         Command::Auth { command } => commands::auth::run(command, ctx).await,
         Command::Config { command } => commands::config::run(command, ctx),
+        Command::Insights { command } => commands::insights::run(command, ctx).await,
         Command::Inspect { command } => commands::inspect::run(command, ctx).await,
         Command::Sitemaps { command } => commands::sitemaps::run(command, ctx).await,
         Command::Sites { command } => commands::sites::run(command, ctx).await,

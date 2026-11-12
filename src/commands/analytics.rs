@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::Context;
 use crate::api::analytics::{
-    Aggregation, DataState, Dimension, Filter, Operator, PAGE_SIZE, Query, Row, SearchType,
+    Aggregation, DataState, Dimension, Filter, Metric, Operator, PAGE_SIZE, Query, Row, SearchType,
 };
 use crate::dates::{self, DateArgs};
 use crate::error::Result;
@@ -79,30 +79,12 @@ impl AnalyticsCommand {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Metric {
-    Clicks,
-    Impressions,
-    Ctr,
-    Position,
-}
-
-impl Metric {
-    fn of(self, row: &Row) -> f64 {
-        match self {
-            Metric::Clicks => row.clicks,
-            Metric::Impressions => row.impressions,
-            Metric::Ctr => row.ctr,
-            Metric::Position => row.position,
-        }
-    }
-
-    /// Best-first direction: position 1 is the best, so it sorts ascending.
-    fn default_order(self) -> Order {
-        match self {
-            Metric::Position => Order::Asc,
-            _ => Order::Desc,
-        }
+/// Best-first direction for a metric: position 1 is the best, so it sorts
+/// ascending, while more clicks, impressions, or CTR is better.
+fn default_order(metric: Metric) -> Order {
+    match metric {
+        Metric::Position => Order::Asc,
+        _ => Order::Desc,
     }
 }
 
@@ -129,9 +111,11 @@ impl Device {
     }
 }
 
-/// Options shared by every analytics subcommand.
-#[derive(Debug, Args)]
-pub struct QueryOptions {
+/// What to measure: the period, the search type, and any filters.
+///
+/// Shared by `gsc analytics` and `gsc insights`.
+#[derive(Debug, Clone, Args)]
+pub struct Scope {
     #[command(flatten)]
     pub dates: DateArgs,
 
@@ -163,6 +147,13 @@ pub struct QueryOptions {
     /// Only this device type
     #[arg(long, value_enum, value_name = "DEVICE")]
     pub device: Option<Device>,
+}
+
+/// Options shared by every analytics subcommand.
+#[derive(Debug, Args)]
+pub struct QueryOptions {
+    #[command(flatten)]
+    pub scope: Scope,
 
     /// Which data to include [default: final]
     #[arg(long, value_enum, value_name = "STATE")]
@@ -194,9 +185,9 @@ pub struct QueryOptions {
     pub order: Option<Order>,
 }
 
-impl QueryOptions {
+impl Scope {
     /// Explicit --filter values plus the shorthand flags, as one AND group.
-    fn filters(&self) -> Vec<Filter> {
+    pub fn filters(&self) -> Vec<Filter> {
         let mut filters = self.filter.clone();
         if let Some(text) = &self.query {
             filters.push(Filter::new(Dimension::Query, Operator::Contains, text));
@@ -264,12 +255,12 @@ pub async fn run(command: AnalyticsCommand, ctx: &Context) -> Result<()> {
             .then_some(DataState::HourlyAll)
     });
     let include_fresh = data_state.is_some_and(DataState::includes_fresh);
-    let range = options.dates.resolve(dates::today(), include_fresh)?;
+    let range = options.scope.dates.resolve(dates::today(), include_fresh)?;
     let query = Query {
         range,
         dimensions: dimensions.clone(),
-        search_type: options.search_type,
-        filters: options.filters(),
+        search_type: options.scope.search_type,
+        filters: options.scope.filters(),
         aggregation: options.aggregation,
         data_state,
     };
@@ -287,7 +278,7 @@ pub async fn run(command: AnalyticsCommand, ctx: &Context) -> Result<()> {
         sort_rows(
             &mut rows,
             metric,
-            options.order.unwrap_or(metric.default_order()),
+            options.order.unwrap_or(default_order(metric)),
         );
     }
     if let Some(show) = plan.show {
@@ -546,6 +537,7 @@ mod tests {
             "--device",
             "mobile",
         ])
+        .scope
         .filters();
         let described: Vec<String> = filters
             .iter()
@@ -588,15 +580,11 @@ mod tests {
         sort_rows(
             &mut rows,
             Metric::Impressions,
-            Metric::Impressions.default_order(),
+            default_order(Metric::Impressions),
         );
         assert_eq!(keys(&rows), ["b", "c", "a"]);
 
-        sort_rows(
-            &mut rows,
-            Metric::Position,
-            Metric::Position.default_order(),
-        );
+        sort_rows(&mut rows, Metric::Position, default_order(Metric::Position));
         assert_eq!(keys(&rows), ["b", "a", "c"], "best position first");
 
         sort_rows(&mut rows, Metric::Clicks, Order::Asc);

@@ -359,7 +359,7 @@ fn raw_cell(value: Option<&Value>) -> String {
 }
 
 /// Human-readable cell for table output.
-fn display_cell(value: Option<&Value>, kind: Kind) -> String {
+pub fn display_cell(value: Option<&Value>, kind: Kind) -> String {
     let Some(value) = value.filter(|v| !v.is_null()) else {
         return "-".into();
     };

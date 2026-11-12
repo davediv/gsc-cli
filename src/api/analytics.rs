@@ -68,6 +68,26 @@ impl Dimension {
     }
 }
 
+/// One of the four numbers reported for every row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Metric {
+    Clicks,
+    Impressions,
+    Ctr,
+    Position,
+}
+
+impl Metric {
+    pub fn of(self, row: &Row) -> f64 {
+        match self {
+            Metric::Clicks => row.clicks,
+            Metric::Impressions => row.impressions,
+            Metric::Ctr => row.ctr,
+            Metric::Position => row.position,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum SearchType {
     #[default]

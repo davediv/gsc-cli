@@ -6,6 +6,7 @@ use crate::commands::analytics::AnalyticsCommand;
 use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
+use crate::commands::insights::InsightsCommand;
 use crate::commands::inspect::InspectCommand;
 use crate::commands::sitemaps::SitemapsCommand;
 use crate::commands::sites::SitesCommand;
@@ -104,6 +105,18 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+
+    /// Ready-made analyses: what changed, what is close to ranking, what underperforms
+    ///
+    ///   gsc insights compare --days 28
+    ///   gsc insights declining --by page --vs year
+    ///   gsc insights striking-distance --with-page
+    ///   gsc insights low-ctr --by query
+    #[command(verbatim_doc_comment)]
+    Insights {
+        #[command(subcommand)]
+        command: InsightsCommand,
     },
 
     /// See how Google indexes a URL, with issues and how to fix them
