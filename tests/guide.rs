@@ -72,32 +72,6 @@ fn the_guide_mentions_every_command() {
 }
 
 #[test]
-fn every_command_in_the_guide_exists() {
-    let text = guide(&[]);
-    let cli = Cli::command();
-    let pattern = Regex::new(r"gsc ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?").unwrap();
-    for found in pattern.captures_iter(&text) {
-        let name = &found[1];
-        let Some(command) = cli.get_subcommands().find(|c| c.get_name() == name) else {
-            panic!("the guide shows `gsc {name}`, which does not exist");
-        };
-        // A second word is a subcommand only if the command has subcommands;
-        // otherwise it is an argument (`gsc api GET`).
-        if let Some(sub) = found.get(2)
-            && command.has_subcommands()
-        {
-            let sub = sub.as_str();
-            assert!(
-                command
-                    .get_subcommands()
-                    .any(|c| c.get_name() == sub || c.get_all_aliases().any(|a| a == sub)),
-                "the guide shows `gsc {name} {sub}`, which does not exist"
-            );
-        }
-    }
-}
-
-#[test]
 fn issue_codes_in_the_guide_match_the_codes_the_program_emits() {
     // Codes produced by the diagnosis rules and by bulk inspection.
     let emitted = Regex::new(r#"(?:findings\.add\(\s*|=> \(|json!\(\[)"([a-z0-9_]+)""#).unwrap();

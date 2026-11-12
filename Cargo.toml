@@ -39,6 +39,7 @@ assert_cmd = "2.2"
 mockito = "1.7.2"
 predicates = "3.1"
 regex = "1.13.1"
+shlex = "2.0.1"
 tempfile = "3.27.0"
 
 [profile.release]
