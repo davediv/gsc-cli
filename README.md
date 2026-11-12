@@ -214,6 +214,8 @@ Credentials are looked up in this order: `GSC_ACCESS_TOKEN`, `GSC_CREDENTIALS_FI
 - `credentials.json`: the OAuth refresh token and client, or the path to your service-account key (the key itself is not copied).
 - `token_cache.json`: short-lived access tokens, so consecutive commands do not each request a new one.
 
+`gsc` refuses to write there if the directory is writable by every user on the machine, because file permissions alone cannot stop someone replacing the files.
+
 `gsc auth logout` deletes both. Add `--revoke` to also invalidate the grant at Google, which signs out every machine using the same OAuth client and account.
 
 ## Good to know
