@@ -220,6 +220,49 @@ fn browser_login_exchanges_the_code_with_pkce_and_saves_a_refresh_token() {
 }
 
 #[test]
+fn a_stalled_connection_does_not_hold_up_the_real_redirect() {
+    let env = TestEnv::new();
+    let mut server = mockito::Server::new();
+    server
+        .mock("POST", "/token")
+        .with_body(
+            json!({
+                "access_token": "a",
+                "expires_in": 3599,
+                "refresh_token": "r",
+                "scope": WEBMASTERS,
+            })
+            .to_string(),
+        )
+        .create();
+    let client_file = write_client_file(&env, &server.url());
+    let login = PendingLogin::start(&env, &client_file, &[]);
+
+    // Connections that are opened and then say nothing, or only start a
+    // request, as a browser preconnect or a hostile local process would.
+    let port = Url::parse(&login.params["redirect_uri"])
+        .unwrap()
+        .port()
+        .unwrap();
+    let silent = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let mut partial = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    partial.write_all(b"GET /?state=").unwrap();
+
+    let started = std::time::Instant::now();
+    let state = login.params["state"].clone();
+    let response = login.browser_get(&format!("/?state={state}&code=c"));
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    let output = login.finish();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "the redirect was answered only after {:?}",
+        started.elapsed()
+    );
+    drop((silent, partial));
+}
+
+#[test]
 fn denying_consent_fails_the_login_without_saving_anything() {
     let env = TestEnv::new();
     let server = mockito::Server::new();

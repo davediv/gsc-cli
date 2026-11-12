@@ -6,6 +6,7 @@
 //! Google redirects the browser back.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aws_lc_rs::{digest, rand};
@@ -14,6 +15,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use url::Url;
 
@@ -28,8 +30,8 @@ const REVOKE_URI: &str = "https://oauth2.googleapis.com/revoke";
 
 /// How long to wait for the user to finish in the browser.
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
-/// How long a single browser connection may take to send its request.
-const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long one connection may take, in total, to send its request.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
 /// An OAuth client registered in a Google Cloud project.
@@ -365,48 +367,79 @@ fn classify_callback(request_target: &str, expected_state: &str) -> Callback {
     }
 }
 
+/// Wait for Google to redirect the browser back with an authorization code.
+///
+/// Each connection is served in its own task and reports back only if it
+/// carried the real redirect. A connection that stalls, whether a browser
+/// preconnect or another local process holding the port open, therefore
+/// cannot delay the one that matters.
 async fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Result<String> {
     let deadline = Instant::now() + CALLBACK_TIMEOUT;
+    let expected_state: Arc<str> = expected_state.into();
+    let (outcome_tx, mut outcome_rx) = mpsc::channel::<Result<String>>(1);
+
     loop {
-        let accepted = tokio::time::timeout_at(deadline, listener.accept())
-            .await
-            .map_err(|_| {
-                Error::auth("timed out waiting for the browser sign-in to finish")
-                    .with_hint("run `gsc auth login` again")
-            })?;
-        let Ok((mut stream, _)) = accepted else {
-            continue;
-        };
-        let Some(target) = read_request_target(&mut stream).await else {
-            continue;
-        };
-        match classify_callback(&target, expected_state) {
-            Callback::Code(code) => {
-                respond(
-                    &mut stream,
-                    "200 OK",
-                    "Signed in",
-                    "gsc is now connected to Google Search Console. You can close this tab.",
-                )
-                .await;
-                return Ok(code);
+        tokio::select! {
+            Some(outcome) = outcome_rx.recv() => return outcome,
+            accepted = listener.accept() => {
+                if let Ok((stream, _)) = accepted {
+                    tokio::spawn(serve_connection(
+                        stream,
+                        expected_state.clone(),
+                        outcome_tx.clone(),
+                    ));
+                }
             }
-            Callback::Denied(reason) => {
-                respond(
-                    &mut stream,
-                    "400 Bad Request",
-                    "Sign-in was not completed",
-                    "Access was not granted. Return to the terminal to try again.",
-                )
-                .await;
-                return Err(Error::auth(format!("sign-in was not completed ({reason})"))
-                    .with_hint("run `gsc auth login` again and approve the request"));
-            }
-            Callback::Unrelated => {
-                respond(&mut stream, "404 Not Found", "Not found", "").await;
+            () = tokio::time::sleep_until(deadline) => {
+                return Err(
+                    Error::auth("timed out waiting for the browser sign-in to finish")
+                        .with_hint("run `gsc auth login` again"),
+                );
             }
         }
     }
+}
+
+/// Answer one connection to the loopback port, reporting the login's outcome
+/// if this was the redirect from Google.
+async fn serve_connection(
+    mut stream: TcpStream,
+    expected_state: Arc<str>,
+    outcome: mpsc::Sender<Result<String>>,
+) {
+    let request = tokio::time::timeout(REQUEST_TIMEOUT, read_request_target(&mut stream)).await;
+    let Ok(Some(target)) = request else {
+        return;
+    };
+    let result = match classify_callback(&target, &expected_state) {
+        Callback::Code(code) => {
+            respond(
+                &mut stream,
+                "200 OK",
+                "Signed in",
+                "gsc is now connected to Google Search Console. You can close this tab.",
+            )
+            .await;
+            Ok(code)
+        }
+        Callback::Denied(reason) => {
+            respond(
+                &mut stream,
+                "400 Bad Request",
+                "Sign-in was not completed",
+                "Access was not granted. Return to the terminal to try again.",
+            )
+            .await;
+            Err(Error::auth(format!("sign-in was not completed ({reason})"))
+                .with_hint("run `gsc auth login` again and approve the request"))
+        }
+        Callback::Unrelated => {
+            respond(&mut stream, "404 Not Found", "Not found", "").await;
+            return;
+        }
+    };
+    // Only the first outcome counts; a repeated redirect is ignored.
+    let _ = outcome.try_send(result);
 }
 
 /// Read an HTTP request and return the target of its request line.
@@ -416,10 +449,7 @@ async fn read_request_target(stream: &mut TcpStream) -> Option<String> {
     // Read the whole header block: replying before the browser has finished
     // sending can make it report a connection reset instead of our page.
     while !buffer.windows(4).any(|w| w == b"\r\n\r\n") && buffer.len() < MAX_REQUEST_BYTES {
-        let read = tokio::time::timeout(REQUEST_READ_TIMEOUT, stream.read(&mut chunk))
-            .await
-            .ok()?
-            .ok()?;
+        let read = stream.read(&mut chunk).await.ok()?;
         if read == 0 {
             break;
         }
