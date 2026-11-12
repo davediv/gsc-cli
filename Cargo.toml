@@ -1,0 +1,28 @@
+[package]
+name = "gsc-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Google Search Console from the command line, built for humans and AI agents"
+keywords = ["google-search-console", "seo", "cli"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "gsc_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gsc"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+assert_cmd = "2.2"
+predicates = "3.1"
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,10 @@
+/target
+
+# Google credentials must never be committed
+client_secret*.json
+*service-account*.json
+*service_account*.json
+credentials.json
+token_cache.json
+
+.DS_Store
