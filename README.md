@@ -1,4 +1,4 @@
-# gsc
+# gsc-cli
 
 Google Search Console from the command line, built for people and for AI agents.
 
