@@ -170,20 +170,50 @@ pub struct Collected {
 /// Reading stops as soon as the limit is reached, so a huge site does not
 /// cost hundreds of downloads when only a sample is wanted.
 pub async fn collect_urls(http: &reqwest::Client, sitemaps: &[String], limit: usize) -> Collected {
+    collect(http, sitemaps, limit, MAX_SITEMAPS, MAX_SITEMAP_BYTES).await
+}
+
+async fn collect(
+    http: &reqwest::Client,
+    sitemaps: &[String],
+    limit: usize,
+    max_sitemaps: usize,
+    max_bytes: u64,
+) -> Collected {
     let mut collected = Collected::default();
-    let mut queue: VecDeque<String> = sitemaps.iter().cloned().collect();
-    let mut visited: HashSet<String> = HashSet::new();
+    // Every sitemap ever queued. Checking it before queueing, rather than
+    // when a sitemap is taken off the queue, keeps the queue itself bounded:
+    // an index can list a million children, or itself.
+    let mut known: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
     let mut seen_urls: HashSet<String> = HashSet::new();
 
+    let enqueue =
+        |candidates: Vec<String>, known: &mut HashSet<String>, queue: &mut VecDeque<String>| {
+            for sitemap in candidates {
+                if known.contains(&sitemap) {
+                    continue;
+                }
+                if known.len() >= max_sitemaps {
+                    // There was more to read than we are willing to fetch.
+                    return true;
+                }
+                known.insert(sitemap.clone());
+                queue.push_back(sitemap);
+            }
+            false
+        };
+    collected.truncated |= enqueue(sitemaps.to_vec(), &mut known, &mut queue);
+
     while let Some(sitemap) = queue.pop_front() {
-        if !visited.insert(sitemap.clone()) {
-            continue;
-        }
-        if collected.urls.len() >= limit || visited.len() > MAX_SITEMAPS {
+        if collected.urls.len() >= limit {
             collected.truncated = true;
             break;
         }
-        let document = match fetch(http, &sitemap).await.and_then(|bytes| parse(&bytes)) {
+        let document = match fetch(http, &sitemap, max_bytes)
+            .await
+            .and_then(|bytes| parse(&bytes))
+        {
             Ok(document) => document,
             Err(reason) => {
                 collected.problems.push(format!("{sitemap}: {reason}"));
@@ -191,7 +221,9 @@ pub async fn collect_urls(http: &reqwest::Client, sitemaps: &[String], limit: us
             }
         };
         match document {
-            Document::Index(children) => queue.extend(children),
+            Document::Index(children) => {
+                collected.truncated |= enqueue(children, &mut known, &mut queue);
+            }
             Document::UrlSet(urls) => {
                 for url in urls {
                     if !seen_urls.insert(url.clone()) {
@@ -209,8 +241,16 @@ pub async fn collect_urls(http: &reqwest::Client, sitemaps: &[String], limit: us
     collected
 }
 
-async fn fetch(http: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
-    let response = http
+/// Download a sitemap, giving up as soon as it proves larger than `max_bytes`.
+///
+/// The body is read in chunks so the cap is enforced while downloading, not
+/// after. The count is of decoded bytes: the HTTP client transparently
+/// inflates `Content-Encoding: gzip`, and a few megabytes on the wire can
+/// expand to gigabytes.
+async fn fetch(http: &reqwest::Client, url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let too_large = || format!("it is larger than {}", human_size(max_bytes));
+
+    let mut response = http
         .get(url)
         .send()
         .await
@@ -218,14 +258,34 @@ async fn fetch(http: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     if !response.status().is_success() {
         return Err(format!("the server answered HTTP {}", response.status()));
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("could not be downloaded ({e})"))?;
-    if bytes.len() as u64 > MAX_SITEMAP_BYTES {
-        return Err("it is larger than 64 MB".to_owned());
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes)
+    {
+        return Err(too_large());
     }
-    Ok(bytes.to_vec())
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("could not be downloaded ({e})"))?
+    {
+        if (body.len() + chunk.len()) as u64 > max_bytes {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn human_size(bytes: u64) -> String {
+    const MEGABYTE: u64 = 1024 * 1024;
+    if bytes >= MEGABYTE {
+        format!("{} MB", bytes / MEGABYTE)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 #[cfg(test)]
@@ -324,9 +384,7 @@ mod tests {
     #[test]
     fn decompresses_gzip_and_strips_a_byte_order_mark() {
         let xml = "\u{feff}<urlset><url><loc>https://example.com/z</loc></url></urlset>";
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(xml.as_bytes()).unwrap();
-        let compressed = encoder.finish().unwrap();
+        let compressed = gzip(xml.as_bytes());
         assert!(compressed.starts_with(&GZIP_MAGIC));
         assert_eq!(
             parse(&compressed).unwrap(),
@@ -350,6 +408,112 @@ mod tests {
     #[test]
     fn an_empty_sitemap_is_valid_and_has_no_urls() {
         assert_eq!(parse(b"<urlset></urlset>").unwrap(), url_set(&[]));
+    }
+
+    fn gzip(text: &[u8]) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(text).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn download_stops_at_the_size_cap() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/big.xml")
+            .with_body("x".repeat(5000))
+            .create_async()
+            .await;
+        server
+            .mock("GET", "/small.xml")
+            .with_body("x".repeat(500))
+            .create_async()
+            .await;
+        let http = reqwest::Client::new();
+
+        let error = fetch(&http, &format!("{}/big.xml", server.url()), 1000)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "it is larger than 1000 bytes");
+
+        let body = fetch(&http, &format!("{}/small.xml", server.url()), 1000)
+            .await
+            .unwrap();
+        assert_eq!(body.len(), 500);
+    }
+
+    #[tokio::test]
+    async fn the_cap_counts_bytes_after_transport_decompression() {
+        // 200 KB of zeros is a few hundred bytes on the wire. The client
+        // inflates it transparently, so only counting what comes out of the
+        // decoder can stop a decompression bomb.
+        let compressed = gzip(&vec![0u8; 200_000]);
+        assert!(compressed.len() < 1000);
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/bomb.xml")
+            .with_header("content-encoding", "gzip")
+            .with_body(compressed)
+            .create_async()
+            .await;
+        let http = crate::http::client().unwrap();
+
+        let error = fetch(&http, &format!("{}/bomb.xml", server.url()), 10_000)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "it is larger than 10000 bytes");
+    }
+
+    #[tokio::test]
+    async fn the_number_of_sitemaps_followed_is_bounded() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+        let children: String = (0..10)
+            .map(|i| format!("<sitemap><loc>{base}/child-{i}.xml</loc></sitemap>"))
+            .collect();
+        server
+            .mock("GET", "/index.xml")
+            // An index that also lists itself must not loop.
+            .with_body(format!(
+                "<sitemapindex><sitemap><loc>{base}/index.xml</loc></sitemap>{children}</sitemapindex>"
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let child = server
+            .mock("GET", mockito::Matcher::Regex(r"^/child-\d\.xml$".into()))
+            .with_body_from_request(|request| {
+                format!(
+                    "<urlset><url><loc>https://example.com{}</loc></url></urlset>",
+                    request.path()
+                )
+                .into_bytes()
+            })
+            .expect(3)
+            .create_async()
+            .await;
+        let http = reqwest::Client::new();
+
+        // Four files in total: the index and its first three children.
+        let collected = collect(&http, &[format!("{base}/index.xml")], 100, 4, 1_000_000).await;
+        child.assert_async().await;
+        assert_eq!(
+            collected.urls,
+            [
+                "https://example.com/child-0.xml",
+                "https://example.com/child-1.xml",
+                "https://example.com/child-2.xml",
+            ]
+        );
+        assert!(collected.truncated, "seven children were left unread");
+        assert!(collected.problems.is_empty());
+    }
+
+    #[test]
+    fn sizes_are_shown_in_readable_units() {
+        assert_eq!(human_size(MAX_SITEMAP_BYTES), "64 MB");
+        assert_eq!(human_size(999), "999 bytes");
     }
 
     #[test]
