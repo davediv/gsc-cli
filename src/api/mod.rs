@@ -5,6 +5,7 @@
 //! responses into [`Error`]s with a hint about what to do next.
 
 pub mod analytics;
+pub mod indexing;
 pub mod inspection;
 pub mod sitemaps;
 pub mod sites;
@@ -338,11 +339,14 @@ fn api_error(api: Api, status: StatusCode, body: &[u8], uses_env_token: bool) ->
                  Search Console to use the Indexing API"
                 .to_owned(),
         }),
-        (_, 404) => Some(
-            "check the property and URL are spelled exactly as in Search Console; \
-             run `gsc sites list`"
+        (_, 404) => Some(match api {
+            Api::SearchConsole => "check the property and URL are spelled exactly as in \
+                 Search Console; run `gsc sites list`"
                 .to_owned(),
-        ),
+            Api::Indexing => "Google has no notification on record for this URL; send one \
+                 with `gsc indexing publish <url>`"
+                .to_owned(),
+        }),
         _ => None,
     };
 

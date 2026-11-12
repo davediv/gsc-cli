@@ -266,7 +266,7 @@ fn limit_caps_requests_and_reports_truncation() {
     assert!(doc["notes"].as_array().unwrap().iter().any(|n| {
         n.as_str()
             .unwrap()
-            .contains("Only the first 3 URLs were selected")
+            .contains("Stopped selecting at the limit of 3 URLs")
     }));
 }
 
@@ -428,7 +428,7 @@ fn quota_exhaustion_stops_early_and_says_what_was_left() {
     assert!(doc["notes"].as_array().unwrap().iter().any(|n| {
         n.as_str()
             .unwrap()
-            .contains("quota ran out, so 3 URLs were not inspected")
+            .contains("quota ran out with 3 URLs left uninspected")
     }));
 }
 

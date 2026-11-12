@@ -428,6 +428,15 @@ fn group_thousands(n: i64) -> String {
     out
 }
 
+/// `1 URL`, `3 URLs`: a count with its noun in the right number.
+pub fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{} {noun}s", group_thousands(n as i64))
+    }
+}
+
 /// Round to a fixed number of decimal places.
 ///
 /// Google returns CTR and position as long floats (`8.238461538461538`).
@@ -661,6 +670,13 @@ soft_404     2
         assert_eq!(group_thousands(1000), "1,000");
         assert_eq!(group_thousands(1234567), "1,234,567");
         assert_eq!(group_thousands(-1234), "-1,234");
+    }
+
+    #[test]
+    fn counts_agree_in_number() {
+        assert_eq!(count(0, "URL"), "0 URLs");
+        assert_eq!(count(1, "URL"), "1 URL");
+        assert_eq!(count(2500, "row"), "2,500 rows");
     }
 
     #[test]

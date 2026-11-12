@@ -6,6 +6,7 @@ use crate::commands::analytics::AnalyticsCommand;
 use crate::commands::api::ApiArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::config::ConfigCommand;
+use crate::commands::indexing::IndexingCommand;
 use crate::commands::insights::InsightsCommand;
 use crate::commands::inspect::InspectCommand;
 use crate::commands::sitemaps::SitemapsCommand;
@@ -105,6 +106,21 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+
+    /// Notify Google about new, changed, or removed URLs (Indexing API)
+    ///
+    /// Google supports this API only for pages with JobPosting or
+    /// BroadcastEvent (livestream) structured data. For everything else,
+    /// keep a sitemap up to date: `gsc sitemaps submit`.
+    ///
+    /// Requirements: the Indexing API enabled in your Google Cloud project,
+    /// and credentials that are a verified owner of the site. With a browser
+    /// login, run `gsc auth login --indexing` once to grant the extra scope.
+    #[command(verbatim_doc_comment)]
+    Indexing {
+        #[command(subcommand)]
+        command: IndexingCommand,
     },
 
     /// Ready-made analyses: what changed, what is close to ranking, what underperforms

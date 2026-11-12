@@ -6,8 +6,8 @@
 //! per day.
 
 use std::collections::HashSet;
-use std::io::{IsTerminal, Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use clap::Args;
@@ -19,9 +19,10 @@ use crate::Context;
 use crate::api::Client;
 use crate::diagnose::Severity;
 use crate::error::{Error, ErrorKind, Result};
-use crate::output::{Column, Kind, Report};
+use crate::output::{Column, Kind, Report, count};
 use crate::site;
 use crate::sitemap_xml;
+use crate::url_list;
 
 #[derive(Debug, Args)]
 pub struct BatchArgs {
@@ -126,7 +127,7 @@ async fn select_urls(args: &BatchArgs, site: &str, client: &Client) -> Result<Se
 
     let mut listed = args.urls.clone();
     if let Some(path) = &args.file {
-        listed.extend(read_url_file(path)?);
+        listed.extend(url_list::read(path)?);
     }
     if listed.is_empty() && sitemaps.is_empty() {
         return Err(Error::usage("no URLs to inspect").with_hint(
@@ -184,29 +185,6 @@ async fn select_urls(args: &BatchArgs, site: &str, client: &Client) -> Result<Se
         truncated,
         problems,
     })
-}
-
-/// Read URLs from a file or stdin: one per line, ignoring blanks and `#` comments.
-fn read_url_file(path: &Path) -> Result<Vec<String>> {
-    let text = if path == Path::new("-") {
-        let mut buffer = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buffer)
-            .map_err(|e| Error::io("reading URLs from stdin", e))?;
-        buffer
-    } else {
-        std::fs::read_to_string(path)
-            .map_err(|e| Error::io(format!("reading {}", path.display()), e))?
-    };
-    Ok(parse_url_lines(&text))
-}
-
-fn parse_url_lines(text: &str) -> Vec<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect()
 }
 
 /// Inspect every URL, a few at a time, keeping results in input order.
@@ -438,7 +416,7 @@ fn build_report(
         .field("Property", site)
         .field(
             "Inspected",
-            format!("{inspected} of {} URLs", selection.urls.len()),
+            format!("{inspected} of {}", count(selection.urls.len(), "URL")),
         )
         .field("Indexed", indexed.to_string())
         .field("Not indexed", (inspected - indexed).to_string())
@@ -477,15 +455,16 @@ fn build_report(
     }
     if skipped > 0 {
         report = report.note(format!(
-            "The URL Inspection quota ran out, so {skipped} URLs were not inspected. \
-             It resets daily; rerun later or with a lower --limit."
+            "The URL Inspection quota ran out with {} left uninspected. It resets daily; \
+             rerun later or with a lower --limit.",
+            count(skipped, "URL")
         ));
     }
     if selection.truncated {
         report = report.note(format!(
-            "Only the first {} URLs were selected; more exist. Raise --limit to cover them \
+            "Stopped selecting at the limit of {}; more exist. Raise --limit to cover them \
              (Google allows 2,000 inspections per property per day).",
-            selection.urls.len()
+            count(selection.urls.len(), "URL")
         ));
     }
     for problem in &selection.problems {
@@ -497,14 +476,6 @@ fn build_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn url_files_skip_blanks_and_comments() {
-        let text =
-            "# pages to check\nhttps://example.com/a\n\n  /pricing  \n#https://example.com/skip\n";
-        assert_eq!(parse_url_lines(text), ["https://example.com/a", "/pricing"]);
-        assert!(parse_url_lines("\n\n").is_empty());
-    }
 
     #[test]
     fn groups_merge_identical_problems_and_keep_distinct_messages_apart() {
